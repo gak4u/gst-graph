@@ -118,7 +118,7 @@ export function normalizeStreamEdgeHandle(
   return `${prefix}${pad}`;
 }
 
-function clonePipelineWithFreshIds(
+export function clonePipelineWithFreshIds(
   pipeline: PipelineDef,
   newName: string,
 ): { cloned: PipelineDef; nodeIdMap: Map<string, string> } {

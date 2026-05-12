@@ -14,6 +14,7 @@ import type {
   VariableValueKind,
 } from '@shared/types';
 import { makeInstanceName } from '../lib/instanceName';
+import { clonePipelineWithFreshIds } from '@shared/installApply';
 
 export interface Pipeline extends PipelineDef {
   running: boolean;
@@ -53,6 +54,7 @@ interface State {
   upsertDetail: (d: GstElementDetail) => void;
   ensureDetail: (name: string) => Promise<GstElementDetail | null>;
   newPipeline: (name?: string) => string;
+  clonePipelineFrom: (sourceId: string, name?: string) => string | null;
   importPipeline: (raw: unknown, fileName?: string) => Promise<string | null>;
   removePipeline: (id: string) => void;
   setActive: (id: string) => void;
@@ -200,6 +202,23 @@ export const useStore = create<State>((set, get) => ({
   newPipeline: (name) => {
     const idx = get().pipelines.length + 1;
     const np = newPipelineDef(name || `Pipeline ${idx}`);
+    set((s) => ({ pipelines: [...s.pipelines, np], activePipelineId: np.id }));
+    return np.id;
+  },
+
+  clonePipelineFrom: (sourceId, name) => {
+    const source = get().pipelines.find((p) => p.id === sourceId);
+    if (!source) return null;
+    const taken = new Set(get().pipelines.map((p) => p.name));
+    let baseName = name?.trim() || `${source.name} (copy)`;
+    let finalName = baseName;
+    let suffix = 2;
+    while (taken.has(finalName)) finalName = `${baseName} ${suffix++}`;
+    const { cloned } = clonePipelineWithFreshIds(
+      { id: source.id, name: source.name, nodes: source.nodes, edges: source.edges },
+      finalName,
+    );
+    const np: Pipeline = { ...cloned, running: false, logs: [] };
     set((s) => ({ pipelines: [...s.pipelines, np], activePipelineId: np.id }));
     return np.id;
   },

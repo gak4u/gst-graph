@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ElementPalette } from './components/ElementPalette';
 import { PipelineGraph } from './components/PipelineGraph';
-import { PipelineTabs } from './components/PipelineTabs';
 import { PropertiesPanel } from './components/PropertiesPanel';
 import { ConsolePanel } from './components/ConsolePanel';
 import { Toolbar } from './components/Toolbar';
@@ -64,7 +63,6 @@ export function App() {
       ) : (
         <div className="app">
           <Toolbar />
-          <PipelineTabs />
           <div className="palette">
             <ElementPalette />
           </div>

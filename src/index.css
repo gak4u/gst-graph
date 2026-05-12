@@ -1767,3 +1767,89 @@ input[type="radio"] {
   border-radius: 6px;
 }
 .setup-actions .ghost:hover { color: var(--fg); border-color: var(--accent); }
+.new-pipeline-modal { max-width: 560px; }
+.new-pipeline-blank-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  text-align: left;
+  background: rgba(120, 160, 240, 0.08);
+  border: 1px solid rgba(120, 160, 240, 0.3);
+  color: var(--fg);
+  padding: 14px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+.new-pipeline-blank-btn:hover {
+  background: rgba(120, 160, 240, 0.16);
+  border-color: rgba(120, 160, 240, 0.55);
+}
+.new-pipeline-blank-icon {
+  font-size: 28px;
+  line-height: 1;
+  color: #a8c8ff;
+  width: 32px;
+  text-align: center;
+}
+.new-pipeline-blank-title { font-size: 15px; font-weight: 600; }
+.new-pipeline-blank-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.new-pipeline-templates { margin-top: 22px; }
+.new-pipeline-templates h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin: 0 0 10px;
+}
+.new-pipeline-empty {
+  font-size: 13px;
+  color: var(--muted);
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+}
+.new-pipeline-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.new-pipeline-tpl {
+  width: 100%;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 10px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.new-pipeline-tpl:hover {
+  border-color: var(--accent, #7ab7ff);
+  background: rgba(255, 255, 255, 0.04);
+}
+.new-pipeline-tpl-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 2px;
+}
+.new-pipeline-tpl-name { font-weight: 600; font-size: 14px; }
+.new-pipeline-tpl-source { font-size: 11px; }
+.new-pipeline-tpl-stats { font-size: 12px; }
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent, #7ab7ff);
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}

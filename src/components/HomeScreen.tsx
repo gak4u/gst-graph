@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useStore } from '../state/store';
+import { NewPipelineModal } from './NewPipelineModal';
 import type { Pipeline } from '../state/store';
 import type { VariableNodeData } from '@shared/types';
 
@@ -284,10 +285,10 @@ export function HomeScreen() {
   const persistenceEnabled = useStore((s) => s.persistenceEnabled);
   const loadError = useStore((s) => s.loadError);
   const hydrated = useStore((s) => s.hydrated);
+  const [showNewModal, setShowNewModal] = useState(false);
 
   function create() {
-    const id = newPipeline();
-    openPipeline(id);
+    setShowNewModal(true);
   }
 
   function importJson() {
@@ -369,6 +370,7 @@ export function HomeScreen() {
           ))}
         </div>
       )}
+      {showNewModal ? <NewPipelineModal onClose={() => setShowNewModal(false)} /> : null}
     </div>
   );
 }
