@@ -127,6 +127,9 @@ async function ensureCache(): Promise<PluginCache> {
   return cache;
 }
 
+const SCREENSHOT_DIR = process.env.GST_GRAPH_SCREENSHOTS_DIR;
+const SCREENSHOT_MODE = !!SCREENSHOT_DIR;
+
 function createWindow(): void {
   const win = new BrowserWindow({
     width: 1480,
@@ -135,6 +138,7 @@ function createWindow(): void {
     minHeight: 720,
     title: 'GStreamer Graph Editor',
     backgroundColor: '#1a1d24',
+    show: !SCREENSHOT_MODE,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -152,6 +156,13 @@ function createWindow(): void {
     win.loadFile(path.join(__dirname, '..', '..', 'dist', 'index.html'));
   }
 
+  if (SCREENSHOT_MODE) {
+    runScreenshotHarness(win, SCREENSHOT_DIR!).catch((e) => {
+      console.error('[screenshot] FAIL', e);
+      app.exit(1);
+    });
+  }
+
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
@@ -166,6 +177,61 @@ function createWindow(): void {
 
   windowsForBroadcast.add(win);
   win.on('closed', () => windowsForBroadcast.delete(win));
+}
+
+async function runScreenshotHarness(win: BrowserWindow, outDir: string): Promise<void> {
+  await fs.promises.mkdir(outDir, { recursive: true });
+  await new Promise<void>((resolve) => {
+    if (win.webContents.isLoading()) {
+      win.webContents.once('did-finish-load', () => resolve());
+    } else {
+      resolve();
+    }
+  });
+  // Give React + xyflow + IPC hydrate a moment to render.
+  await new Promise((r) => setTimeout(r, 2200));
+
+  async function snap(name: string): Promise<void> {
+    const image = await win.webContents.capturePage();
+    const target = path.join(outDir, name);
+    await fs.promises.writeFile(target, image.toPNG());
+    console.log(`[screenshot] wrote ${target}`);
+  }
+
+  await snap('home.png');
+
+  const firstPipelineId = (await win.webContents.executeJavaScript(
+    `(() => { const s = window.__gstStore && window.__gstStore.getState(); if (!s) return null; const p = s.pipelines && s.pipelines[0]; return p ? p.id : null; })()`,
+  )) as string | null;
+
+  if (firstPipelineId) {
+    await win.webContents.executeJavaScript(
+      `window.__gstStore.getState().openPipeline(${JSON.stringify(firstPipelineId)})`,
+    );
+    await new Promise((r) => setTimeout(r, 2000));
+    await win.webContents.executeJavaScript(
+      `(() => { try { const rf = document.querySelector('.react-flow__viewport'); if (rf) rf.style.transition='none'; } catch {} })()`,
+    );
+    // Fit the view so the pipeline graph is centered.
+    await win.webContents.executeJavaScript(
+      `(() => { const btn = document.querySelector('button[title="fit view" i], .react-flow__controls-fitview'); if (btn) btn.click(); })()`,
+    );
+    await new Promise((r) => setTimeout(r, 800));
+    await snap('editor.png');
+
+    const firstElementNodeId = (await win.webContents.executeJavaScript(
+      `(() => { const s = window.__gstStore && window.__gstStore.getState(); if (!s) return null; const p = s.pipelines.find((p) => p.id === ${JSON.stringify(firstPipelineId)}); const n = p && p.nodes.find((n) => n.type === 'gstElement'); return n ? n.id : null; })()`,
+    )) as string | null;
+    if (firstElementNodeId) {
+      await win.webContents.executeJavaScript(
+        `window.__gstStore.getState().selectNode(${JSON.stringify(firstElementNodeId)})`,
+      );
+      await new Promise((r) => setTimeout(r, 1000));
+      await snap('properties.png');
+    }
+  }
+
+  app.exit(0);
 }
 
 const windowsForBroadcast = new Set<BrowserWindow>();

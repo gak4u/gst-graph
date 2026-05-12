@@ -17,6 +17,7 @@
     "mcp:build": "tsc -p tsconfig.electron.json",
     "mcp:smoke": "node scripts/mcp-smoke.cjs",
     "mcp:smoke:http": "node scripts/mcp-http-smoke.cjs",
+    "screenshots": "npm run build && node scripts/take-screenshots.cjs",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
     "lint": "eslint . --ext .ts,.tsx"
   },

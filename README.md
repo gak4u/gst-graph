@@ -9,6 +9,26 @@ Includes an MCP (Model Context Protocol) server so a local LLM agent
 can read, edit, and run pipelines on your machine using the same data
 files the UI uses, with live two-way sync.
 
+## Screenshots
+
+Home screen — pipelines as tiles with variable controls, status, and
+start/stop/configure/export actions:
+
+![Home screen](docs/screenshots/home.png)
+
+Editor — plugin-aware palette, multi-pipeline tabs, the xyflow graph
+canvas with variable / transform / element nodes, minimap, and the
+console pane at the bottom:
+
+![Pipeline editor](docs/screenshots/editor.png)
+
+Inspector — every element exposes its properties grouped by category,
+with the right widget per kind (booleans, enums, ranges, fractions,
+strings), conditional-property visibility (e.g. `pattern=ball` reveals
+the relevant fields), pad templates and caps, and a property search:
+
+![Element inspector](docs/screenshots/properties.png)
+
 ## Features
 
 - **Plugin-aware palette.** The app shells out to `gst-inspect-1.0` on
@@ -271,6 +291,7 @@ started by the agent can be stopped from the UI and vice versa.
 | `npm run mcp:build`  | Compile only the MCP/Electron Node side                |
 | `npm run mcp:smoke`  | Spawn the stdio MCP server and run an integration test |
 | `npm run mcp:smoke:http` | Boot the HTTP MCP server and check it                |
+| `npm run screenshots` | Rebuild and capture the README screenshots (uses a sandboxed temp HOME) |
 
 ## Architecture
 
