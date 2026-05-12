@@ -1,0 +1,47 @@
+{
+  "name": "gst-graph",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GStreamer pipeline graph editor",
+  "main": "dist-electron/electron/main.js",
+  "scripts": {
+    "dev:renderer": "vite",
+    "dev:electron": "tsc -p tsconfig.electron.json -w --preserveWatchOutput",
+    "dev:app": "wait-on http://localhost:5173 dist-electron/electron/main.js && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
+    "dev": "concurrently -k -n vite,tsc,electron -c blue,yellow,green \"npm:dev:renderer\" \"npm:dev:electron\" \"npm:dev:app\"",
+    "build:renderer": "vite build",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "build": "npm run build:renderer && npm run build:electron",
+    "start": "electron .",
+    "mcp": "node dist-electron/mcp/stdio.js",
+    "mcp:build": "tsc -p tsconfig.electron.json",
+    "mcp:smoke": "node scripts/mcp-smoke.cjs",
+    "mcp:smoke:http": "node scripts/mcp-http-smoke.cjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
+    "lint": "eslint . --ext .ts,.tsx"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@xyflow/react": "^12.3.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zod": "^3.25.76",
+    "zustand": "^4.5.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.10",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.0",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "@vitejs/plugin-react": "^4.3.2",
+    "concurrently": "^9.0.1",
+    "cross-env": "^7.0.3",
+    "electron": "^32.1.2",
+    "eslint": "^8.57.1",
+    "eslint-plugin-react-hooks": "^4.6.2",
+    "typescript": "^5.6.2",
+    "vite": "^5.4.8",
+    "wait-on": "^8.0.1"
+  }
+}
