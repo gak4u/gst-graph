@@ -61,11 +61,17 @@ function rescoreCards(
 }
 
 export async function searchMarketplace(input: SearchInput): Promise<MarketplaceSearchResult> {
+  const authed = !!input.githubToken;
   if (!input.forceRefresh) {
-    const hit = readSearch(input.query);
+    const hit = readSearch(input.query, authed);
     if (hit) {
+      // rateLimit on the cached hit is the value at fetch time, which goes
+      // stale within seconds (search bucket refills every minute). Strip it
+      // here so the UI doesn't display a misleading "X/Y left" — fresh fetch
+      // via Refresh repopulates it.
+      const { rateLimit: _staleLimit, ...rest } = hit;
       return {
-        ...hit,
+        ...rest,
         cards: rescoreCards(hit.cards, input.installedElements, input.installedGstreamerVersion),
       };
     }
@@ -177,7 +183,7 @@ export async function searchMarketplace(input: SearchInput): Promise<Marketplace
     fetchedAt: Date.now(),
     cached: false,
   };
-  writeSearch(input.query, result);
+  writeSearch(input.query, result, authed);
   return result;
 }
 

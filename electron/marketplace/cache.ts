@@ -43,22 +43,23 @@ function flush(): void {
   }
 }
 
-export function normalizeQuery(q: string): string {
-  return q.trim().toLowerCase().replace(/\s+/g, ' ');
+export function normalizeQuery(q: string, authed = false): string {
+  const base = q.trim().toLowerCase().replace(/\s+/g, ' ');
+  return `${authed ? 'auth' : 'anon'}:${base}`;
 }
 
-export function readSearch(query: string): MarketplaceSearchResult | null {
+export function readSearch(query: string, authed = false): MarketplaceSearchResult | null {
   const c = load();
-  const key = normalizeQuery(query);
+  const key = normalizeQuery(query, authed);
   const hit = c.search[key];
   if (!hit) return null;
   if (Date.now() - hit.fetchedAt > CACHE_TTL_MS) return null;
   return { ...hit, cached: true };
 }
 
-export function writeSearch(query: string, result: MarketplaceSearchResult): void {
+export function writeSearch(query: string, result: MarketplaceSearchResult, authed = false): void {
   const c = load();
-  c.search[normalizeQuery(query)] = result;
+  c.search[normalizeQuery(query, authed)] = result;
   flush();
 }
 

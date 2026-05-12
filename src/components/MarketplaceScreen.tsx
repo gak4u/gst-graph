@@ -84,7 +84,11 @@ export function MarketplaceScreen(): JSX.Element {
                 <>
                   {' · '}
                   {cards.length} package{cards.length === 1 ? '' : 's'} ({compatibleCount} compatible)
-                  {result.cached ? <span className="muted"> · cached</span> : null}
+                  {result.cached ? (
+                    <span className="muted" title="Click ↻ Refresh to fetch a live result and update the search-API rate limit.">
+                      {' '}· cached
+                    </span>
+                  ) : null}
                 </>
               ) : null}
               {result?.rateLimit ? (
@@ -92,6 +96,10 @@ export function MarketplaceScreen(): JSX.Element {
                   {' · '}
                   Search API: {result.rateLimit.remaining}/{result.rateLimit.limit}
                   {result.rateLimit.limit > 10 ? '/min' : '/min (anon)'}
+                </span>
+              ) : result?.cached ? (
+                <span className="muted" title="Click ↻ Refresh to repopulate.">
+                  {' · '}rate limit hidden (cached result)
                 </span>
               ) : null}
               {result?.auth ? (
