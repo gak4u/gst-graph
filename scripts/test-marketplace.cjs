@@ -41,6 +41,7 @@ const {
   applyPackageInstall,
   validatePipelineDefShape,
   isSuspiciousElement,
+  normalizeStreamEdgeHandle,
   PipelineShapeError,
 } = require(path.join(BUILD_DIR, 'installApply.js'));
 
@@ -334,6 +335,82 @@ throws(
   /expected 1 fetched pipeline/,
   'rejects mismatched pipeline count',
 );
+
+group('normalizeStreamEdgeHandle');
+assert(normalizeStreamEdgeHandle('src', 'source', 'src') === 'src:src', 'bare src → src:src');
+assert(normalizeStreamEdgeHandle('sink', 'target', 'sink') === 'sink:sink', 'bare sink → sink:sink');
+assert(normalizeStreamEdgeHandle('src:video_%u', 'source', 'video_0') === 'src:video_%u', 'already-prefixed kept');
+assert(normalizeStreamEdgeHandle(null, 'source', 'video_0') === 'src:video_0', 'null handle uses pad');
+assert(normalizeStreamEdgeHandle(null, 'target', undefined) === 'sink:sink', 'null handle + no pad defaults to sink:sink');
+
+group('applyPackageInstall normalizes stream edge handles');
+const stripeManifest = parseManifest({
+  schemaVersion: 1,
+  id: 'preview',
+  name: 'Preview',
+  version: '1.0.0',
+  pipelines: [{ file: 'pipelines/p.json', name: 'Preview' }],
+});
+const legacyPipeline = {
+  id: 'pl_legacy',
+  name: 'Preview',
+  nodes: [
+    { id: 'n_src', type: 'gstElement', position: { x: 0, y: 0 }, data: { elementName: 'videotestsrc', instanceName: 'src0', properties: {} } },
+    { id: 'n_conv', type: 'gstElement', position: { x: 100, y: 0 }, data: { elementName: 'videoconvert', instanceName: 'conv0', properties: {} } },
+    { id: 'v_p', type: 'gstVariable', position: { x: 0, y: 100 }, data: { varName: 'pattern', valueKind: 'string', value: 'ball' } },
+  ],
+  edges: [
+    { id: 'e1', source: 'n_src', target: 'n_conv', sourceHandle: 'src', targetHandle: 'sink', data: { sourcePad: 'src', targetPad: 'sink', edgeKind: 'stream' } },
+    { id: 'e2', source: 'v_p', target: 'n_src', sourceHandle: 'out', targetHandle: 'prop:pattern', data: { bindingProperty: 'pattern', edgeKind: 'binding' } },
+  ],
+};
+const legacyPlan = applyPackageInstall({
+  manifest: stripeManifest,
+  fetchedPipelines: [legacyPipeline],
+  existingPipelineNames: [],
+});
+const builtLegacy = legacyPlan.newPipelines[0];
+const streamEdge = builtLegacy.edges.find((e) => e.data && e.data.edgeKind === 'stream');
+assert(streamEdge.sourceHandle === 'src:src', 'stream edge sourceHandle prefixed');
+assert(streamEdge.targetHandle === 'sink:sink', 'stream edge targetHandle prefixed');
+const bindingEdge = builtLegacy.edges.find((e) => e.data && e.data.edgeKind === 'binding');
+assert(bindingEdge.sourceHandle === 'out', 'binding edge sourceHandle untouched');
+assert(bindingEdge.targetHandle === 'prop:pattern', 'binding edge targetHandle untouched');
+
+const inferredPipeline = {
+  id: 'pl_inferred',
+  name: 'Inferred',
+  nodes: legacyPipeline.nodes,
+  edges: [
+    // No edgeKind in data, but both ends are gstElement → infer stream
+    { id: 'e1', source: 'n_src', target: 'n_conv', sourceHandle: 'src', targetHandle: 'sink', data: { sourcePad: 'src', targetPad: 'sink' } },
+  ],
+};
+const inferredPlan = applyPackageInstall({
+  manifest: stripeManifest,
+  fetchedPipelines: [inferredPipeline],
+  existingPipelineNames: ['Preview'],
+});
+const inferredStream = inferredPlan.newPipelines[0].edges[0];
+assert(inferredStream.sourceHandle === 'src:src', 'inferred stream edge sourceHandle prefixed');
+assert(inferredStream.targetHandle === 'sink:sink', 'inferred stream edge targetHandle prefixed');
+
+const prefixedPipeline = {
+  id: 'pl_prefixed',
+  name: 'Prefixed',
+  nodes: legacyPipeline.nodes,
+  edges: [
+    { id: 'e1', source: 'n_src', target: 'n_conv', sourceHandle: 'src:src', targetHandle: 'sink:sink', data: { sourcePad: 'src', targetPad: 'sink', edgeKind: 'stream' } },
+  ],
+};
+const prefixedPlan = applyPackageInstall({
+  manifest: stripeManifest,
+  fetchedPipelines: [prefixedPipeline],
+  existingPipelineNames: ['Preview', 'Preview (2)'],
+});
+const prefixedStream = prefixedPlan.newPipelines[0].edges[0];
+assert(prefixedStream.sourceHandle === 'src:src', 'already-prefixed stream edge kept');
+assert(prefixedStream.targetHandle === 'sink:sink', 'already-prefixed stream edge kept');
 
 console.log('');
 if (failures > 0) {

@@ -107,11 +107,23 @@ export function validatePipelineDefShape(raw: unknown, ctx: string): PipelineDef
   return raw as unknown as PipelineDef;
 }
 
+export function normalizeStreamEdgeHandle(
+  handle: string | null | undefined,
+  side: 'source' | 'target',
+  padFromData: string | undefined,
+): string {
+  const prefix = side === 'source' ? 'src:' : 'sink:';
+  if (handle && handle.startsWith(prefix)) return handle;
+  const pad = padFromData || handle || (side === 'source' ? 'src' : 'sink');
+  return `${prefix}${pad}`;
+}
+
 function clonePipelineWithFreshIds(
   pipeline: PipelineDef,
   newName: string,
 ): { cloned: PipelineDef; nodeIdMap: Map<string, string> } {
   const nodeIdMap = new Map<string, string>();
+  const nodeTypeById = new Map<string, string>();
   const cloned: PipelineDef = {
     id: newRandomId('pl'),
     name: newName,
@@ -121,6 +133,7 @@ function clonePipelineWithFreshIds(
   for (const node of pipeline.nodes) {
     const fresh = newRandomId(prefixForNode(node.type));
     nodeIdMap.set(node.id, fresh);
+    nodeTypeById.set(node.id, node.type);
     cloned.nodes.push({
       ...node,
       id: fresh,
@@ -132,12 +145,36 @@ function clonePipelineWithFreshIds(
     const remappedSource = nodeIdMap.get(edge.source);
     const remappedTarget = nodeIdMap.get(edge.target);
     if (!remappedSource || !remappedTarget) continue;
+    const edgeData = edge.data ? { ...edge.data } : edge.data;
+    const edgeKind = (edgeData as { edgeKind?: string } | undefined)?.edgeKind;
+    const inferredKind =
+      edgeKind ||
+      (nodeTypeById.get(edge.source) === 'gstElement' &&
+      nodeTypeById.get(edge.target) === 'gstElement'
+        ? 'stream'
+        : undefined);
+    let sourceHandle = edge.sourceHandle;
+    let targetHandle = edge.targetHandle;
+    if (inferredKind === 'stream') {
+      sourceHandle = normalizeStreamEdgeHandle(
+        sourceHandle,
+        'source',
+        (edgeData as { sourcePad?: string } | undefined)?.sourcePad,
+      );
+      targetHandle = normalizeStreamEdgeHandle(
+        targetHandle,
+        'target',
+        (edgeData as { targetPad?: string } | undefined)?.targetPad,
+      );
+    }
     cloned.edges.push({
       ...edge,
       id: newRandomId('e'),
       source: remappedSource,
       target: remappedTarget,
-      data: edge.data ? { ...edge.data } : edge.data,
+      sourceHandle,
+      targetHandle,
+      data: edgeData,
     });
   }
   return { cloned, nodeIdMap };
