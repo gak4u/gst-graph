@@ -201,6 +201,25 @@ async function runScreenshotHarness(win: BrowserWindow, outDir: string): Promise
 
   await snap('home.png');
 
+  // Marketplace screenshot — switch to marketplace view and wait for it to fetch
+  await win.webContents.executeJavaScript(
+    `window.__gstStore.getState().setView('marketplace')`,
+  );
+  // Wait for cards to render (the marketplace fetches lazily)
+  for (let i = 0; i < 30; i++) {
+    const ready = await win.webContents.executeJavaScript(
+      `(() => { const el = document.querySelector('.marketplace-grid'); return el ? el.children.length : 0; })()`,
+    );
+    if (ready > 0) break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  await new Promise((r) => setTimeout(r, 400));
+  await snap('marketplace.png');
+  await win.webContents.executeJavaScript(
+    `window.__gstStore.getState().setView('home')`,
+  );
+  await new Promise((r) => setTimeout(r, 600));
+
   const firstPipelineId = (await win.webContents.executeJavaScript(
     `(() => { const s = window.__gstStore && window.__gstStore.getState(); if (!s) return null; const p = s.pipelines && s.pipelines[0]; return p ? p.id : null; })()`,
   )) as string | null;

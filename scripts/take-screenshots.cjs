@@ -177,6 +177,14 @@ function buildPreviewPipeline() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.mkdirSync(OUT_DIR, { recursive: true });
 
+  // Prime the fake HOME's plugin cache from the real one to avoid a slow
+  // first-run gst-inspect (saves ~20s and lets the marketplace render with
+  // accurate compatibility data).
+  const realCache = path.join(os.homedir(), '.gst-graph', 'plugin-cache.json');
+  if (fs.existsSync(realCache)) {
+    fs.copyFileSync(realCache, path.join(DATA_DIR, 'plugin-cache.json'));
+  }
+
   const fixture = {
     pipelines: [buildLivePipeline(), buildTranscodePipeline(), buildPreviewPipeline()],
   };

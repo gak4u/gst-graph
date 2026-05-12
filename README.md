@@ -29,6 +29,14 @@ the relevant fields), pad templates and caps, and a property search:
 
 ![Element inspector](docs/screenshots/properties.png)
 
+Marketplace — browse public GitHub repos tagged `gst-graph-package`,
+see at a glance whether your local GStreamer install has the plugins a
+package needs, and install with one click. Compatibility is checked
+against your `gst-inspect-1.0` plugin cache and any GStreamer version
+range declared by the package.
+
+![Package marketplace](docs/screenshots/marketplace.png)
+
 ## Features
 
 - **Plugin-aware palette.** The app shells out to `gst-inspect-1.0` on
@@ -81,6 +89,13 @@ the relevant fields), pad templates and caps, and a property search:
   editing, transforms, variables, and runtime control. The Electron UI
   watches the data files and reloads live when the agent makes
   changes.
+- **Package marketplace.** Any public GitHub repo tagged with the
+  topic `gst-graph-package` becomes discoverable. A repo can ship a
+  single package at its root, or multiple under `packages/<id>/`.
+  The app checks each package's required GStreamer elements against
+  your locally installed plugin set before letting you install it.
+  Example reference packages live at
+  [gak4u/gst-graph-package-examples](https://github.com/gak4u/gst-graph-package-examples).
 
 ## Requirements
 
@@ -219,6 +234,80 @@ with an `autosave on` / `autosave OFF` indicator. If autosave goes OFF
 (unreadable `pipelines.json`), the file is left alone instead of being
 overwritten with an empty state — back it up from `.bak` if needed and
 then restart the app.
+
+## Package marketplace
+
+Open the **🛒 Marketplace** button on the Home screen. The app calls the
+GitHub Search API for public repos tagged with the topic
+`gst-graph-package`, fetches each package's manifest, and renders cards
+with a compatibility pill that compares the package's required elements
+against your locally cached `gst-inspect-1.0` plugin set.
+
+Search results are cached in `~/.gst-graph/marketplace-cache.json` for
+an hour (use **↻ Refresh** to invalidate). Unauthenticated GitHub
+requests are limited to 10 search calls per minute; setting a personal
+access token will be supported in a later milestone.
+
+### Publishing a package
+
+A package is just a public GitHub repo with the topic
+`gst-graph-package` and a `gst-package.json` manifest. The repo can host
+a single package at the root or multiple packages under
+`packages/<id>/`:
+
+```
+my-package-repo/                           topic: gst-graph-package
+├── gst-package.json                       # single-package layout
+├── README.md
+└── pipelines/
+    └── livestream.json
+```
+
+Or multi-package:
+
+```
+my-packages-repo/
+├── gst-index.json                         # optional, avoids directory walk
+├── README.md
+└── packages/
+    ├── rtmp-livestream/
+    │   ├── gst-package.json
+    │   └── pipelines/livestream.json
+    └── file-transcode/
+        ├── gst-package.json
+        └── pipelines/transcode.json
+```
+
+Minimal `gst-package.json`:
+
+```json
+{
+  "schemaVersion": 1,
+  "id": "rtmp-livestream",
+  "name": "RTMP Livestream",
+  "version": "1.0.0",
+  "summary": "Encode video + audio and push to any RTMP endpoint.",
+  "author": { "name": "you", "url": "https://github.com/you" },
+  "tags": ["livestream", "rtmp"],
+  "license": "PolyForm-NC-1.0",
+  "requires": {
+    "gstreamer": ">=1.18",
+    "elements": ["videotestsrc", "x264enc", "flvmux", "rtmpsink"]
+  },
+  "pipelines": [{ "file": "pipelines/livestream.json", "name": "RTMP Livestream" }],
+  "variables": [
+    { "varName": "host", "label": "RTMP Host", "default": "live.twitch.tv/app" },
+    { "varName": "streamKey", "label": "Stream Key", "secret": true }
+  ]
+}
+```
+
+The pipeline JSON files inside the package use exactly the same format
+the app exports today, so the easiest way to author a package is: build
+the pipeline in the editor, click `↓ Export`, drop the JSON into a
+`pipelines/` folder, and write the manifest. See
+[gak4u/gst-graph-package-examples](https://github.com/gak4u/gst-graph-package-examples)
+for working examples.
 
 ## MCP integration
 
