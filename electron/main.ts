@@ -6,6 +6,7 @@ import { listElements, inspectElement, getGstVersion } from './gst/inspect';
 import { runner, buildCommand } from './gst/runner';
 import { startHttpMcpServer } from '../mcp/http';
 import { invalidateMarketplaceCache, searchMarketplace } from './marketplace';
+import { clearMarketplaceAuthCache, getMarketplaceAuth } from './marketplace/auth';
 import { fetchPackagePipelines, resolveRepoAtSha } from './marketplace/client';
 import { findInstalled, installKey, readInstalled, upsertInstalled } from './marketplace/installs';
 import { applyPackageInstall } from '../shared/installApply';
@@ -378,27 +379,40 @@ ipcMain.handle(
   'gst:marketplaceSearch',
   async (_evt, input: { query: string; forceRefresh?: boolean }) => {
     const c = await ensureCache();
-    return searchMarketplace({
+    const auth = await getMarketplaceAuth();
+    const result = await searchMarketplace({
       query: input.query,
       installedElements: c.elements.map((e) => e.name),
       installedGstreamerVersion: c.version,
+      githubToken: auth.token,
       forceRefresh: !!input.forceRefresh,
     });
+    return {
+      ...result,
+      auth: { authenticated: !!auth.token, source: auth.source },
+    };
   },
 );
 
 ipcMain.handle('gst:marketplaceClearCache', async () => {
   invalidateMarketplaceCache();
+  clearMarketplaceAuthCache();
   return { ok: true };
+});
+
+ipcMain.handle('gst:marketplaceAuthStatus', async () => {
+  const auth = await getMarketplaceAuth();
+  return { authenticated: !!auth.token, source: auth.source };
 });
 
 async function resolvePackageAtSha(
   target: MarketplaceInstallTarget,
+  token: string | undefined,
 ): Promise<
   | { ok: true; manifest: import('../shared/marketplace').PackageManifest; pipelinesPath: string }
   | { ok: false; error: string }
 > {
-  const resolved = await resolveRepoAtSha(target.repo, target.sha, target.defaultBranch, undefined);
+  const resolved = await resolveRepoAtSha(target.repo, target.sha, target.defaultBranch, token);
   if (!resolved) {
     return { ok: false, error: `Could not resolve ${target.repo} at ${target.sha.slice(0, 7)}` };
   }
@@ -416,7 +430,8 @@ ipcMain.handle(
   'gst:marketplaceInstallPreview',
   async (_evt, target: MarketplaceInstallTarget): Promise<MarketplaceInstallPreview | MarketplaceInstallPreviewError> => {
     try {
-      const resolved = await resolvePackageAtSha(target);
+      const auth = await getMarketplaceAuth();
+      const resolved = await resolvePackageAtSha(target, auth.token);
       if (!resolved.ok) return { ok: false, error: resolved.error };
       const { manifest, pipelinesPath } = resolved;
 
@@ -472,7 +487,8 @@ ipcMain.handle(
   'gst:marketplaceInstall',
   async (_evt, target: MarketplaceInstallTarget): Promise<MarketplaceInstallResult> => {
     try {
-      const resolved = await resolvePackageAtSha(target);
+      const auth = await getMarketplaceAuth();
+      const resolved = await resolvePackageAtSha(target, auth.token);
       if (!resolved.ok) return { ok: false, error: resolved.error };
       const { manifest, pipelinesPath } = resolved;
 

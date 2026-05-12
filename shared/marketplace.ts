@@ -126,10 +126,16 @@ export interface MarketplaceRateLimitInfo {
   resetAt: number;
 }
 
+export interface MarketplaceAuthState {
+  authenticated: boolean;
+  source?: 'gh';
+}
+
 export interface MarketplaceSearchResult {
   cards: MarketplacePackageCard[];
   warnings: string[];
   rateLimit?: MarketplaceRateLimitInfo;
+  auth?: MarketplaceAuthState;
   fetchedAt: number;
   cached: boolean;
 }

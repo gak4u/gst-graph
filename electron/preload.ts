@@ -39,6 +39,7 @@ const api: GstIpcApi = {
   marketplaceInstallPreview: (input) => ipcRenderer.invoke('gst:marketplaceInstallPreview', input),
   marketplaceInstall: (input) => ipcRenderer.invoke('gst:marketplaceInstall', input),
   marketplaceListInstalled: () => ipcRenderer.invoke('gst:marketplaceListInstalled'),
+  marketplaceAuthStatus: () => ipcRenderer.invoke('gst:marketplaceAuthStatus'),
 };
 
 contextBridge.exposeInMainWorld('gst', api);

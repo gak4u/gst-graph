@@ -90,7 +90,23 @@ export function MarketplaceScreen(): JSX.Element {
               {result?.rateLimit ? (
                 <span className="muted">
                   {' · '}
-                  {result.rateLimit.remaining}/{result.rateLimit.limit} GitHub API requests left
+                  Search API: {result.rateLimit.remaining}/{result.rateLimit.limit}
+                  {result.rateLimit.limit > 10 ? '/min' : '/min (anon)'}
+                </span>
+              ) : null}
+              {result?.auth ? (
+                <span className="muted">
+                  {' · '}
+                  {result.auth.authenticated
+                    ? `auth: ${result.auth.source ?? 'token'}`
+                    : (
+                      <>
+                        anonymous —{' '}
+                        <span title="Run `gh auth login` in your terminal to get 30/min search + 5000/hr core">
+                          run <code>gh auth login</code> for higher limits
+                        </span>
+                      </>
+                    )}
                 </span>
               ) : null}
             </div>

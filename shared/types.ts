@@ -211,6 +211,7 @@ export interface GstIpcApi {
     input: import('./marketplace').MarketplaceInstallTarget,
   ): Promise<import('./marketplace').MarketplaceInstallResult>;
   marketplaceListInstalled(): Promise<import('./marketplace').InstalledPackage[]>;
+  marketplaceAuthStatus(): Promise<import('./marketplace').MarketplaceAuthState>;
 }
 
 declare global {
