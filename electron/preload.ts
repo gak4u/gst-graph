@@ -11,6 +11,7 @@ const api: GstIpcApi = {
   listElements: () => ipcRenderer.invoke('gst:list'),
   inspectElement: (name: string) => ipcRenderer.invoke('gst:inspect', name),
   getGstVersion: () => ipcRenderer.invoke('gst:version'),
+  checkGstreamerInstall: () => ipcRenderer.invoke('gst:checkInstall'),
   runPipeline: (def: PipelineDef) => ipcRenderer.invoke('gst:run', def),
   stopPipeline: (id: string) => ipcRenderer.invoke('gst:stop', id),
   buildCommand: (def: PipelineDef) => ipcRenderer.invoke('gst:build', def),

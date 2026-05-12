@@ -3,6 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { listElements, inspectElement, getGstVersion } from './gst/inspect';
+import { checkGstreamerInstall } from './gst/setup';
 import { runner, buildCommand } from './gst/runner';
 import { startHttpMcpServer } from '../mcp/http';
 import { invalidateMarketplaceCache, searchMarketplace } from './marketplace';
@@ -344,6 +345,10 @@ ipcMain.handle('gst:inspect', async (_evt, name: string) => {
 
 ipcMain.handle('gst:version', async () => {
   return getGstVersion();
+});
+
+ipcMain.handle('gst:checkInstall', async () => {
+  return checkGstreamerInstall();
 });
 
 ipcMain.handle('gst:build', async (_evt, def: PipelineDef) => {

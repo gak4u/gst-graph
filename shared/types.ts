@@ -184,10 +184,23 @@ export interface LoadPipelinesResult {
   path?: string;
 }
 
+export type GstreamerPlatform = 'darwin' | 'linux' | 'win32' | 'unknown';
+
+export interface GstreamerInstallStatus {
+  installed: boolean;
+  version?: string;
+  binaryPath?: string;
+  platform: GstreamerPlatform;
+  downloadUrl: string;
+  installCommands: Array<{ label: string; command: string }>;
+  diagnostic?: string;
+}
+
 export interface GstIpcApi {
   listElements(): Promise<GstElementSummary[]>;
   inspectElement(name: string): Promise<GstElementDetail | null>;
   getGstVersion(): Promise<string>;
+  checkGstreamerInstall(): Promise<GstreamerInstallStatus>;
   runPipeline(def: PipelineDef): Promise<{ ok: boolean; error?: string; pid?: number; command: string }>;
   stopPipeline(pipelineId: string): Promise<{ ok: boolean }>;
   buildCommand(def: PipelineDef): Promise<string>;

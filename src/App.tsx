@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ElementPalette } from './components/ElementPalette';
 import { PipelineGraph } from './components/PipelineGraph';
 import { PipelineTabs } from './components/PipelineTabs';
@@ -7,7 +7,11 @@ import { ConsolePanel } from './components/ConsolePanel';
 import { Toolbar } from './components/Toolbar';
 import { HomeScreen } from './components/HomeScreen';
 import { MarketplaceScreen } from './components/MarketplaceScreen';
+import { SetupScreen } from './components/SetupScreen';
 import { useStore } from './state/store';
+import type { GstreamerInstallStatus } from '@shared/types';
+
+type SetupPhase = 'checking' | 'missing' | 'ready';
 
 export function App() {
   const appendLog = useStore((s) => s.appendLog);
@@ -18,7 +22,21 @@ export function App() {
   const toasts = useStore((s) => s.toasts);
   const dismissToast = useStore((s) => s.dismissToast);
 
+  const [setupPhase, setSetupPhase] = useState<SetupPhase>('checking');
+  const [installStatus, setInstallStatus] = useState<GstreamerInstallStatus | null>(null);
+
+  const runInstallCheck = useCallback(async () => {
+    const status = await window.gst.checkGstreamerInstall();
+    setInstallStatus(status);
+    setSetupPhase(status.installed ? 'ready' : 'missing');
+  }, []);
+
   useEffect(() => {
+    void runInstallCheck();
+  }, [runInstallCheck]);
+
+  useEffect(() => {
+    if (setupPhase !== 'ready') return;
     hydrate();
     const offLog = window.gst.onLog((entry) => appendLog(entry));
     const offStatus = window.gst.onStatus((status) => setStatus(status));
@@ -28,7 +46,14 @@ export function App() {
       offStatus();
       offChanged?.();
     };
-  }, [appendLog, setStatus, hydrate, reloadFromDisk]);
+  }, [setupPhase, appendLog, setStatus, hydrate, reloadFromDisk]);
+
+  if (setupPhase === 'checking') {
+    return <div className="setup-checking">Checking GStreamer installation…</div>;
+  }
+  if (setupPhase === 'missing' && installStatus) {
+    return <SetupScreen status={installStatus} onRetry={runInstallCheck} />;
+  }
 
   return (
     <div className={`app-root view-${view}`}>
