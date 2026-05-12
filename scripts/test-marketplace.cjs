@@ -20,6 +20,7 @@ function build() {
       '--strict',
       path.join(PROJECT, 'shared', 'marketplace.ts'),
       path.join(PROJECT, 'shared', 'marketplaceCheck.ts'),
+      path.join(PROJECT, 'shared', 'installApply.ts'),
       path.join(PROJECT, 'shared', 'types.ts'),
     ],
     { stdio: 'inherit' },
@@ -36,6 +37,12 @@ const { parseManifest, ManifestParseError, checkCompatibility, satisfiesRange, c
   BUILD_DIR,
   'marketplaceCheck.js',
 ));
+const {
+  applyPackageInstall,
+  validatePipelineDefShape,
+  isSuspiciousElement,
+  PipelineShapeError,
+} = require(path.join(BUILD_DIR, 'installApply.js'));
 
 let failures = 0;
 function assert(ok, label) {
@@ -179,6 +186,154 @@ report = checkCompatibility(noGst, {
   installedElements,
 });
 assert(report.compatible === true, 'no gstreamer range means compatible');
+
+group('validatePipelineDefShape');
+throws(() => validatePipelineDefShape(null, 'x'), /must be an object/, 'rejects null');
+throws(() => validatePipelineDefShape({}, 'x'), /missing string "id"/, 'rejects missing id');
+throws(
+  () => validatePipelineDefShape({ id: 'a', name: 'b', nodes: 'no', edges: [] }, 'x'),
+  /missing "nodes" array/,
+  'rejects non-array nodes',
+);
+throws(
+  () => validatePipelineDefShape({ id: 'a', name: 'b', nodes: [], edges: 'no' }, 'x'),
+  /missing "edges" array/,
+  'rejects non-array edges',
+);
+const validPipeline = {
+  id: 'pl_src',
+  name: 'Source Pipeline',
+  nodes: [{ id: 'n1', type: 'gstElement', position: { x: 0, y: 0 }, data: { elementName: 'videotestsrc', instanceName: 'v0', properties: {} } }],
+  edges: [],
+};
+const validated = validatePipelineDefShape(validPipeline, 'x');
+assert(validated === validPipeline, 'returns same object on success');
+
+group('isSuspiciousElement');
+assert(isSuspiciousElement('shellrun') === true, 'flags shell substring');
+assert(isSuspiciousElement('exec') === true, 'flags exec');
+assert(isSuspiciousElement('pipeline-dot-q') === true, 'flags pipeline');
+assert(isSuspiciousElement('videotestsrc') === false, 'safe element passes');
+assert(isSuspiciousElement('x264enc') === false, 'safe encoder passes');
+
+group('applyPackageInstall');
+const installManifest = parseManifest({
+  schemaVersion: 1,
+  id: 'rtmp-livestream',
+  name: 'RTMP Livestream',
+  version: '1.0.0',
+  pipelines: [{ file: 'pipelines/p.json', name: 'Stream' }],
+  variables: [
+    { varName: 'host', label: 'Host', default: 'live.twitch.tv/app' },
+    { varName: 'streamKey', label: 'Stream Key', secret: true, default: 'leaked-key' },
+    { varName: 'bitrate', label: 'Bitrate', default: 4500 },
+  ],
+});
+const sourcePipeline = {
+  id: 'pl_orig',
+  name: 'Stream',
+  nodes: [
+    { id: 'v_host', type: 'gstVariable', position: { x: 10, y: 10 }, data: { varName: 'host', valueKind: 'string', value: '' } },
+    { id: 'v_streamKey', type: 'gstVariable', position: { x: 10, y: 60 }, data: { varName: 'streamKey', valueKind: 'string', value: '' } },
+    { id: 'v_br', type: 'gstVariable', position: { x: 10, y: 110 }, data: { varName: 'bitrate', valueKind: 'number', value: 9000 } },
+    { id: 'n_src', type: 'gstElement', position: { x: 200, y: 10 }, data: { elementName: 'videotestsrc', instanceName: 'src0', properties: {} } },
+    { id: 'n_enc', type: 'gstElement', position: { x: 360, y: 10 }, data: { elementName: 'x264enc', instanceName: 'enc0', properties: {} } },
+    { id: 't_fmt', type: 'gstTransform', position: { x: 520, y: 10 }, data: { kind: 'concat', inputs: [{ id: 'in1', name: 'host' }], expression: '${host}' } },
+  ],
+  edges: [
+    { id: 'e1', source: 'n_src', target: 'n_enc', sourceHandle: 'src', targetHandle: 'sink', data: { edgeKind: 'stream' } },
+    { id: 'e2', source: 'v_host', target: 't_fmt', sourceHandle: 'value', targetHandle: 'in1', data: { transformInputId: 'in1', edgeKind: 'value' } },
+  ],
+};
+
+const installInput = {
+  manifest: installManifest,
+  fetchedPipelines: [sourcePipeline],
+  existingPipelineNames: ['Other Pipeline'],
+};
+const installInputSnapshot = JSON.stringify(installInput);
+const plan = applyPackageInstall(installInput);
+
+assert(plan.newPipelines.length === 1, 'one pipeline produced');
+const built = plan.newPipelines[0];
+assert(built.id !== sourcePipeline.id, 'pipeline id remapped');
+assert(built.id.startsWith('pl_'), 'pipeline id has pl_ prefix');
+assert(built.name === 'Stream', 'pipeline name retained when not duplicate');
+
+const allNewIds = new Set(built.nodes.map((n) => n.id));
+const allOldIds = new Set(sourcePipeline.nodes.map((n) => n.id));
+let anyOverlap = false;
+for (const id of allNewIds) if (allOldIds.has(id)) anyOverlap = true;
+assert(anyOverlap === false, 'no node id leaked from source');
+assert(allNewIds.size === sourcePipeline.nodes.length, 'all nodes remapped uniquely');
+
+const variableNode = built.nodes.find((n) => n.type === 'gstVariable' && n.data.varName === 'host');
+assert(!!variableNode, 'host variable preserved');
+assert(variableNode.data.value === 'live.twitch.tv/app', 'host default applied');
+
+const streamKeyNode = built.nodes.find((n) => n.type === 'gstVariable' && n.data.varName === 'streamKey');
+assert(!!streamKeyNode, 'streamKey variable preserved');
+assert(streamKeyNode.data.value === '', 'secret default NOT applied');
+assert(plan.skippedSecretDefaults.includes('streamKey'), 'skippedSecretDefaults lists streamKey');
+
+const bitrateNode = built.nodes.find((n) => n.type === 'gstVariable' && n.data.varName === 'bitrate');
+assert(bitrateNode.data.value === 9000, 'existing non-empty variable value preserved');
+
+assert(plan.appliedDefaults.length === 1, 'one default applied');
+assert(plan.appliedDefaults[0].varName === 'host', 'applied default is host');
+assert(plan.appliedDefaults[0].value === 'live.twitch.tv/app', 'applied default value matches');
+
+const builtEdges = built.edges;
+assert(builtEdges.length === 2, 'edges preserved');
+for (const e of builtEdges) {
+  const sourceRemapped = allNewIds.has(e.source);
+  const targetRemapped = allNewIds.has(e.target);
+  assert(sourceRemapped, `edge ${e.id} source points to a fresh node id`);
+  assert(targetRemapped, `edge ${e.id} target points to a fresh node id`);
+}
+const valueEdge = builtEdges.find((e) => e.data && e.data.transformInputId === 'in1');
+assert(!!valueEdge, 'transformInputId preserved on cloned edge');
+
+const previewItem = plan.pipelinePreviews[0];
+assert(previewItem.elementCount === 2, 'preview element count');
+assert(previewItem.variableCount === 3, 'preview variable count');
+assert(previewItem.transformCount === 1, 'preview transform count');
+assert(previewItem.uniqueElements.includes('x264enc'), 'preview unique elements');
+assert(previewItem.suspiciousElements.length === 0, 'no suspicious elements in safe pipeline');
+
+assert(JSON.stringify(installInput) === installInputSnapshot, 'applyPackageInstall does not mutate input');
+
+const dupPlan = applyPackageInstall({
+  manifest: installManifest,
+  fetchedPipelines: [sourcePipeline],
+  existingPipelineNames: ['Stream'],
+});
+assert(dupPlan.newPipelines[0].name === 'Stream (2)', 'dedupe appends (2) on collision');
+
+const suspiciousPipeline = {
+  ...sourcePipeline,
+  id: 'pl_susp',
+  nodes: [
+    ...sourcePipeline.nodes,
+    { id: 'n_shell', type: 'gstElement', position: { x: 700, y: 10 }, data: { elementName: 'shellexec', instanceName: 'shell0', properties: {} } },
+  ],
+};
+const suspPlan = applyPackageInstall({
+  manifest: installManifest,
+  fetchedPipelines: [suspiciousPipeline],
+  existingPipelineNames: [],
+});
+assert(suspPlan.pipelinePreviews[0].suspiciousElements.includes('shellexec'), 'flags shellexec as suspicious');
+
+throws(
+  () => applyPackageInstall({
+    manifest: installManifest,
+    fetchedPipelines: [],
+    existingPipelineNames: [],
+  }),
+  /expected 1 fetched pipeline/,
+  'rejects mismatched pipeline count',
+);
 
 console.log('');
 if (failures > 0) {

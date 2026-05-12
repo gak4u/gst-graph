@@ -1511,3 +1511,128 @@ input[type="radio"] {
 }
 .back-btn:hover { color: var(--fg); border-color: var(--accent); }
 .muted { color: var(--muted); }
+.marketplace-pill.installed {
+  background: rgba(120, 160, 240, 0.15);
+  color: #a8c8ff;
+  border: 1px solid rgba(120, 160, 240, 0.35);
+}
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 32px;
+}
+.modal {
+  background: var(--panel, #1f232c);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  max-width: 720px;
+  width: 100%;
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  padding: 24px 28px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.modal-head h2 { margin: 0; font-size: 18px; }
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 20px;
+}
+.install-source {
+  font-size: 13px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+}
+.install-source code { color: var(--fg); }
+.install-warn-line {
+  margin-top: 6px;
+  color: #ffd28a;
+  font-size: 12px;
+}
+.install-loading {
+  padding: 24px 0;
+  text-align: center;
+  color: var(--muted);
+}
+.install-section { margin: 16px 0; }
+.install-section h3 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+.install-pipelines, .install-defaults {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.install-pipelines li {
+  background: rgba(255, 255, 255, 0.02);
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+.install-pipeline-name { font-weight: 600; font-size: 14px; }
+.install-pipeline-stats { font-size: 12px; margin-top: 2px; }
+.install-pipeline-elements {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.install-element {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--fg);
+}
+.install-element.suspicious {
+  background: rgba(255, 180, 50, 0.18);
+  color: #ffd28a;
+  border: 1px solid rgba(255, 180, 50, 0.35);
+}
+.install-defaults li { font-size: 13px; }
+.install-ok {
+  color: #9fdbb1;
+  font-size: 13px;
+}
+.install-warn {
+  background: rgba(255, 180, 50, 0.08);
+  border-left: 2px solid rgba(255, 180, 50, 0.6);
+  padding: 6px 8px;
+  border-radius: 0 3px 3px 0;
+  font-size: 13px;
+  margin: 4px 0;
+}
+.install-ack {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--fg);
+  padding: 10px;
+  background: rgba(255, 180, 50, 0.06);
+  border: 1px solid rgba(255, 180, 50, 0.25);
+  border-radius: 6px;
+}

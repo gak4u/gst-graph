@@ -202,6 +202,15 @@ export interface GstIpcApi {
   >;
   marketplaceSearch(input: { query: string; forceRefresh?: boolean }): Promise<import('./marketplace').MarketplaceSearchResult>;
   marketplaceClearCache(): Promise<{ ok: boolean }>;
+  marketplaceInstallPreview(
+    input: import('./marketplace').MarketplaceInstallTarget,
+  ): Promise<
+    import('./marketplace').MarketplaceInstallPreview | import('./marketplace').MarketplaceInstallPreviewError
+  >;
+  marketplaceInstall(
+    input: import('./marketplace').MarketplaceInstallTarget,
+  ): Promise<import('./marketplace').MarketplaceInstallResult>;
+  marketplaceListInstalled(): Promise<import('./marketplace').InstalledPackage[]>;
 }
 
 declare global {

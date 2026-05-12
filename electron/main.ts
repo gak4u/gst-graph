@@ -6,6 +6,17 @@ import { listElements, inspectElement, getGstVersion } from './gst/inspect';
 import { runner, buildCommand } from './gst/runner';
 import { startHttpMcpServer } from '../mcp/http';
 import { invalidateMarketplaceCache, searchMarketplace } from './marketplace';
+import { fetchPackagePipelines, resolveRepoAtSha } from './marketplace/client';
+import { findInstalled, installKey, readInstalled, upsertInstalled } from './marketplace/installs';
+import { applyPackageInstall } from '../shared/installApply';
+import { checkCompatibility } from '../shared/marketplaceCheck';
+import type {
+  InstalledPackage,
+  MarketplaceInstallPreview,
+  MarketplaceInstallPreviewError,
+  MarketplaceInstallResult,
+  MarketplaceInstallTarget,
+} from '../shared/marketplace';
 import type { LoadPipelinesResult, PersistedPipelines, PipelineDef } from '../shared/types';
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
@@ -379,4 +390,137 @@ ipcMain.handle(
 ipcMain.handle('gst:marketplaceClearCache', async () => {
   invalidateMarketplaceCache();
   return { ok: true };
+});
+
+async function resolvePackageAtSha(
+  target: MarketplaceInstallTarget,
+): Promise<
+  | { ok: true; manifest: import('../shared/marketplace').PackageManifest; pipelinesPath: string }
+  | { ok: false; error: string }
+> {
+  const resolved = await resolveRepoAtSha(target.repo, target.sha, target.defaultBranch, undefined);
+  if (!resolved) {
+    return { ok: false, error: `Could not resolve ${target.repo} at ${target.sha.slice(0, 7)}` };
+  }
+  const match = resolved.packages.find((p) => p.packageId === target.packageId);
+  if (!match) {
+    return {
+      ok: false,
+      error: `Package "${target.packageId}" not found in ${target.repo} at ${target.sha.slice(0, 7)}`,
+    };
+  }
+  return { ok: true, manifest: match.manifest, pipelinesPath: match.pipelinesPath };
+}
+
+ipcMain.handle(
+  'gst:marketplaceInstallPreview',
+  async (_evt, target: MarketplaceInstallTarget): Promise<MarketplaceInstallPreview | MarketplaceInstallPreviewError> => {
+    try {
+      const resolved = await resolvePackageAtSha(target);
+      if (!resolved.ok) return { ok: false, error: resolved.error };
+      const { manifest, pipelinesPath } = resolved;
+
+      const fetched = await fetchPackagePipelines({
+        repo: target.repo,
+        sha: target.sha,
+        pipelinesPath,
+        pipelines: manifest.pipelines,
+      });
+
+      const existing = await readPipelinesFile();
+      const existingNames = (existing.pipelines || []).map((p) => p.name);
+      const plan = applyPackageInstall({
+        manifest,
+        fetchedPipelines: fetched,
+        existingPipelineNames: existingNames,
+      });
+
+      const cache = await ensureCache();
+      const compatibility = checkCompatibility(manifest, {
+        installedElements: cache.elements.map((e) => e.name),
+        installedGstreamerVersion: cache.version,
+      });
+
+      const alreadyInstalled = await findInstalled(DATA_DIR, target.repo, target.packageId);
+
+      return {
+        ok: true,
+        manifest,
+        repo: target.repo,
+        packageId: target.packageId,
+        sha: target.sha,
+        pipelines: plan.pipelinePreviews.map((pp) => ({
+          name: pp.name,
+          elementCount: pp.elementCount,
+          variableCount: pp.variableCount,
+          transformCount: pp.transformCount,
+          uniqueElements: pp.uniqueElements,
+          suspiciousElements: pp.suspiciousElements,
+        })),
+        appliedDefaults: plan.appliedDefaults,
+        skippedSecretDefaults: plan.skippedSecretDefaults,
+        compatibility,
+        alreadyInstalled,
+      };
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    }
+  },
+);
+
+ipcMain.handle(
+  'gst:marketplaceInstall',
+  async (_evt, target: MarketplaceInstallTarget): Promise<MarketplaceInstallResult> => {
+    try {
+      const resolved = await resolvePackageAtSha(target);
+      if (!resolved.ok) return { ok: false, error: resolved.error };
+      const { manifest, pipelinesPath } = resolved;
+
+      const fetched = await fetchPackagePipelines({
+        repo: target.repo,
+        sha: target.sha,
+        pipelinesPath,
+        pipelines: manifest.pipelines,
+      });
+
+      const existing = await readPipelinesFile();
+      if (!existing.ok) {
+        return { ok: false, error: `Could not read pipelines.json: ${existing.error || 'unknown error'}` };
+      }
+      const existingPipelines = existing.pipelines || [];
+      const plan = applyPackageInstall({
+        manifest,
+        fetchedPipelines: fetched,
+        existingPipelineNames: existingPipelines.map((p) => p.name),
+      });
+
+      const nextPipelines: PipelineDef[] = [...existingPipelines, ...plan.newPipelines];
+      await enqueueSave({ pipelines: nextPipelines });
+
+      const record: InstalledPackage = {
+        key: installKey(target.repo, target.packageId),
+        repo: target.repo,
+        packageId: target.packageId,
+        version: manifest.version,
+        sha: target.sha,
+        pipelineIds: plan.newPipelines.map((p) => p.id),
+        installedAt: Date.now(),
+      };
+      await upsertInstalled(DATA_DIR, record);
+
+      broadcastExternalChange();
+
+      return {
+        ok: true,
+        installed: record,
+        addedPipelineNames: plan.newPipelines.map((p) => p.name),
+      };
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    }
+  },
+);
+
+ipcMain.handle('gst:marketplaceListInstalled', async () => {
+  return readInstalled(DATA_DIR);
 });

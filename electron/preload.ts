@@ -36,6 +36,9 @@ const api: GstIpcApi = {
   marketplaceSearch: (input: { query: string; forceRefresh?: boolean }) =>
     ipcRenderer.invoke('gst:marketplaceSearch', input),
   marketplaceClearCache: () => ipcRenderer.invoke('gst:marketplaceClearCache'),
+  marketplaceInstallPreview: (input) => ipcRenderer.invoke('gst:marketplaceInstallPreview', input),
+  marketplaceInstall: (input) => ipcRenderer.invoke('gst:marketplaceInstall', input),
+  marketplaceListInstalled: () => ipcRenderer.invoke('gst:marketplaceListInstalled'),
 };
 
 contextBridge.exposeInMainWorld('gst', api);

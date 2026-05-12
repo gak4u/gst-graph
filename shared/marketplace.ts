@@ -133,3 +133,50 @@ export interface MarketplaceSearchResult {
   fetchedAt: number;
   cached: boolean;
 }
+
+export interface MarketplaceInstallTarget {
+  repo: string;
+  packageId: string;
+  sha: string;
+  defaultBranch: string;
+}
+
+export interface MarketplaceInstallPipelinePreview {
+  name: string;
+  elementCount: number;
+  variableCount: number;
+  transformCount: number;
+  uniqueElements: string[];
+  suspiciousElements: string[];
+}
+
+export interface MarketplaceInstallAppliedDefault {
+  pipelineName: string;
+  varName: string;
+  value: string | number | boolean | null;
+}
+
+export interface MarketplaceInstallPreview {
+  ok: true;
+  manifest: PackageManifest;
+  repo: string;
+  packageId: string;
+  sha: string;
+  pipelines: MarketplaceInstallPipelinePreview[];
+  appliedDefaults: MarketplaceInstallAppliedDefault[];
+  skippedSecretDefaults: string[];
+  compatibility: CompatibilityReport;
+  alreadyInstalled?: InstalledPackage;
+}
+
+export interface MarketplaceInstallPreviewError {
+  ok: false;
+  error: string;
+}
+
+export interface MarketplaceInstallResult {
+  ok: boolean;
+  error?: string;
+  installed?: InstalledPackage;
+  addedPipelineNames?: string[];
+}

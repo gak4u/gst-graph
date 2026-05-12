@@ -4,9 +4,12 @@ import {
   PACKAGE_TOPIC,
   type MarketplaceRateLimitInfo,
   type PackageManifest,
+  type PackagePipelineRef,
   type PackageRepoIndex,
 } from '../../shared/marketplace';
 import { parseManifest } from '../../shared/marketplaceCheck';
+import { validatePipelineDefShape } from '../../shared/installApply';
+import type { PipelineDef } from '../../shared/types';
 
 export const FEATURED_REPO = 'gak4u/gst-graph-featured';
 export const FEATURED_INDEX_FILE = 'index.json';
@@ -241,6 +244,110 @@ export async function resolveRepoPackages(
     }
   }
   return { repo, sha, defaultBranch, packages, warnings };
+}
+
+export async function resolveRepoAtSha(
+  repo: string,
+  sha: string,
+  defaultBranch: string,
+  token: string | undefined,
+): Promise<RepoPackages | null> {
+  const warnings: string[] = [];
+
+  const rootManifestRaw = await ghRaw(rawUrl(repo, sha, PACKAGE_MANIFEST_FILE));
+  if (rootManifestRaw !== null) {
+    try {
+      const parsed = JSON.parse(rootManifestRaw);
+      const manifest = parseManifest(parsed, `${repo}/${PACKAGE_MANIFEST_FILE}`);
+      return {
+        repo,
+        sha,
+        defaultBranch,
+        packages: [
+          {
+            packageId: manifest.id,
+            manifestPath: PACKAGE_MANIFEST_FILE,
+            pipelinesPath: '',
+            manifest,
+          },
+        ],
+        warnings,
+      };
+    } catch (e) {
+      warnings.push((e as Error).message);
+      return { repo, sha, defaultBranch, packages: [], warnings };
+    }
+  }
+
+  const index = await readJsonFromRepo<PackageRepoIndex>(repo, sha, PACKAGE_INDEX_FILE);
+  const candidates: Array<{ id?: string; path: string }> = [];
+  if (index && Array.isArray(index.packages)) {
+    for (const e of index.packages) {
+      if (typeof e.path === 'string') candidates.push({ id: e.id, path: e.path.replace(/^\/+/, '') });
+    }
+  } else {
+    const entries = await listDirIfExists(repo, sha, 'packages', token);
+    if (entries) {
+      for (const entry of entries) {
+        if (entry.type === 'dir') candidates.push({ path: `packages/${entry.name}` });
+      }
+    }
+  }
+
+  if (candidates.length === 0) {
+    return { repo, sha, defaultBranch, packages: [], warnings };
+  }
+
+  const packages: ResolvedPackageOnRepo[] = [];
+  for (const cand of candidates) {
+    const manifestPath = `${cand.path}/${PACKAGE_MANIFEST_FILE}`;
+    const raw = await ghRaw(rawUrl(repo, sha, manifestPath));
+    if (raw === null) {
+      warnings.push(`Missing ${manifestPath} in ${repo}`);
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      const manifest = parseManifest(parsed, `${repo}/${manifestPath}`);
+      packages.push({
+        packageId: manifest.id,
+        manifestPath,
+        pipelinesPath: cand.path,
+        manifest,
+      });
+    } catch (e) {
+      warnings.push((e as Error).message);
+    }
+  }
+  return { repo, sha, defaultBranch, packages, warnings };
+}
+
+export async function fetchPackagePipelines(args: {
+  repo: string;
+  sha: string;
+  pipelinesPath: string;
+  pipelines: PackagePipelineRef[];
+}): Promise<PipelineDef[]> {
+  const { repo, sha, pipelinesPath, pipelines } = args;
+  const results: PipelineDef[] = [];
+  for (const ref of pipelines) {
+    if (ref.file.includes('..') || ref.file.startsWith('/')) {
+      throw new Error(`Pipeline file rejected (path traversal): ${ref.file}`);
+    }
+    const fullPath = pipelinesPath ? `${pipelinesPath}/${ref.file}` : ref.file;
+    const raw = await ghRaw(rawUrl(repo, sha, fullPath));
+    if (raw === null) {
+      throw new Error(`Pipeline file not found in ${repo}@${sha.slice(0, 7)}: ${fullPath}`);
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      throw new Error(`Invalid JSON in ${fullPath} (${repo}@${sha.slice(0, 7)}): ${(e as Error).message}`);
+    }
+    results.push(validatePipelineDefShape(parsed, `${repo}/${fullPath}`));
+  }
+  return results;
 }
 
 export async function fetchFeaturedIndex(token: string | undefined): Promise<{
