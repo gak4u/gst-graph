@@ -1844,6 +1844,18 @@ input[type="radio"] {
 .new-pipeline-tpl-name { font-weight: 600; font-size: 14px; }
 .new-pipeline-tpl-source { font-size: 11px; }
 .new-pipeline-tpl-stats { font-size: 12px; }
+.new-pipeline-tpl.orphan { border-style: dashed; }
+.new-pipeline-tpl.orphan:disabled { opacity: 0.55; cursor: progress; }
+.new-pipeline-tpl-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(120, 160, 240, 0.18);
+  color: #a8c8ff;
+  border: 1px solid rgba(120, 160, 240, 0.35);
+}
 .link-btn {
   background: none;
   border: none;

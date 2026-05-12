@@ -6,20 +6,28 @@ interface NewPipelineModalProps {
   onClose: () => void;
 }
 
-interface TemplateEntry {
-  installed: InstalledPackage;
-  pipeline: { id: string; name: string; elementCount: number; variableCount: number };
-}
+type TemplateEntry =
+  | {
+      kind: 'local';
+      installed: InstalledPackage;
+      pipeline: { id: string; name: string; elementCount: number; variableCount: number };
+    }
+  | {
+      kind: 'orphan';
+      installed: InstalledPackage;
+    };
 
 export function NewPipelineModal({ onClose }: NewPipelineModalProps): JSX.Element {
   const pipelines = useStore((s) => s.pipelines);
   const newPipeline = useStore((s) => s.newPipeline);
   const clonePipelineFrom = useStore((s) => s.clonePipelineFrom);
   const openPipeline = useStore((s) => s.openPipeline);
+  const reloadFromDisk = useStore((s) => s.reloadFromDisk);
   const toast = useStore((s) => s.toast);
 
   const [installed, setInstalled] = useState<InstalledPackage[]>([]);
   const [loading, setLoading] = useState(true);
+  const [reinstallingKey, setReinstallingKey] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -42,10 +50,16 @@ export function NewPipelineModal({ onClose }: NewPipelineModalProps): JSX.Elemen
     const byId = new Map(pipelines.map((p) => [p.id, p]));
     const rows: TemplateEntry[] = [];
     for (const pkg of installed) {
-      for (const pipelineId of pkg.pipelineIds) {
-        const p = byId.get(pipelineId);
-        if (!p) continue; // orphaned record — pipeline was deleted manually
+      const localPipelines = pkg.pipelineIds
+        .map((id) => byId.get(id))
+        .filter((p): p is NonNullable<typeof p> => !!p);
+      if (localPipelines.length === 0) {
+        rows.push({ kind: 'orphan', installed: pkg });
+        continue;
+      }
+      for (const p of localPipelines) {
         rows.push({
+          kind: 'local',
           installed: pkg,
           pipeline: {
             id: p.id,
@@ -73,6 +87,34 @@ export function NewPipelineModal({ onClose }: NewPipelineModalProps): JSX.Elemen
     }
     openPipeline(id);
     onClose();
+  }
+
+  async function reinstallAndOpen(pkg: InstalledPackage): Promise<void> {
+    setReinstallingKey(pkg.key);
+    try {
+      const res = await window.gst.marketplaceInstall({
+        repo: pkg.repo,
+        packageId: pkg.packageId,
+        sha: pkg.sha,
+        defaultBranch: 'main',
+      });
+      if (!res.ok || !res.installed) {
+        toast(res.error || 'Re-install failed', 'err');
+        return;
+      }
+      await reloadFromDisk();
+      const newId = res.installed.pipelineIds[0];
+      if (newId) {
+        openPipeline(newId);
+      } else {
+        toast('Re-installed but no pipeline was added', 'warn');
+      }
+      onClose();
+    } catch (e) {
+      toast(`Re-install failed: ${(e as Error).message}`, 'err');
+    } finally {
+      setReinstallingKey(null);
+    }
   }
 
   return (
@@ -115,27 +157,48 @@ export function NewPipelineModal({ onClose }: NewPipelineModalProps): JSX.Elemen
             </div>
           ) : (
             <ul className="new-pipeline-list">
-              {templates.map((t) => (
-                <li key={`${t.installed.key}:${t.pipeline.id}`}>
-                  <button
-                    className="new-pipeline-tpl"
-                    onClick={() => startFromTemplate(t.pipeline.id)}
-                  >
-                    <div className="new-pipeline-tpl-head">
-                      <span className="new-pipeline-tpl-name">{t.pipeline.name}</span>
-                      <span className="new-pipeline-tpl-source muted">
-                        from <code>{t.installed.packageId}</code>
-                      </span>
-                    </div>
-                    <div className="new-pipeline-tpl-stats muted">
-                      {t.pipeline.elementCount} element
-                      {t.pipeline.elementCount === 1 ? '' : 's'} ·{' '}
-                      {t.pipeline.variableCount} variable
-                      {t.pipeline.variableCount === 1 ? '' : 's'} · v{t.installed.version}
-                    </div>
-                  </button>
-                </li>
-              ))}
+              {templates.map((t) =>
+                t.kind === 'local' ? (
+                  <li key={`${t.installed.key}:${t.pipeline.id}`}>
+                    <button
+                      className="new-pipeline-tpl"
+                      onClick={() => startFromTemplate(t.pipeline.id)}
+                    >
+                      <div className="new-pipeline-tpl-head">
+                        <span className="new-pipeline-tpl-name">{t.pipeline.name}</span>
+                        <span className="new-pipeline-tpl-source muted">
+                          from <code>{t.installed.packageId}</code>
+                        </span>
+                      </div>
+                      <div className="new-pipeline-tpl-stats muted">
+                        {t.pipeline.elementCount} element
+                        {t.pipeline.elementCount === 1 ? '' : 's'} ·{' '}
+                        {t.pipeline.variableCount} variable
+                        {t.pipeline.variableCount === 1 ? '' : 's'} · v{t.installed.version}
+                      </div>
+                    </button>
+                  </li>
+                ) : (
+                  <li key={t.installed.key}>
+                    <button
+                      className="new-pipeline-tpl orphan"
+                      onClick={() => reinstallAndOpen(t.installed)}
+                      disabled={reinstallingKey === t.installed.key}
+                    >
+                      <div className="new-pipeline-tpl-head">
+                        <span className="new-pipeline-tpl-name">{t.installed.packageId}</span>
+                        <span className="new-pipeline-tpl-badge">re-fetch</span>
+                      </div>
+                      <div className="new-pipeline-tpl-stats muted">
+                        Installed but no local pipeline.{' '}
+                        {reinstallingKey === t.installed.key
+                          ? 'Re-installing…'
+                          : `Click to re-install v${t.installed.version} from GitHub.`}
+                      </div>
+                    </button>
+                  </li>
+                ),
+              )}
             </ul>
           )}
         </section>
