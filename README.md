@@ -16,9 +16,9 @@ start/stop/configure/export actions:
 
 ![Home screen](docs/screenshots/home.png)
 
-Editor — plugin-aware palette, multi-pipeline tabs, the xyflow graph
-canvas with variable / transform / element nodes, minimap, and the
-console pane at the bottom:
+Editor — plugin-aware palette, the xyflow graph canvas with variable
+/ transform / element nodes, minimap, and the console pane at the
+bottom:
 
 ![Pipeline editor](docs/screenshots/editor.png)
 
@@ -52,7 +52,15 @@ range declared by the package.
 - **Multiple pipelines.** Home screen lists every saved pipeline as a
   tile with a status pill, exposed variables, and Start / Stop /
   Configure / Export / Delete actions. Each tile becomes its own
-  editor when opened.
+  editor when opened. The editor focuses on one pipeline at a time —
+  use `← Home` to leave the editor without deleting anything.
+- **New pipeline chooser.** `+ New Pipeline` opens a small modal: pick
+  **Blank pipeline** to start empty, or pick any pipeline from an
+  installed marketplace package as a one-click template. Templates
+  clone with fresh node/edge IDs, so editing the new copy never
+  touches the source. If a package's pipelines were deleted but the
+  install record remains, the chooser offers to re-fetch the package
+  from GitHub.
 - **Variables.** Add a `string` / `number` / `boolean` variable, wire
   its output handle to any element property, and the property's value
   is overridden at runtime. The variable's kind is auto-inferred from
@@ -93,9 +101,21 @@ range declared by the package.
   topic `gst-graph-package` becomes discoverable. A repo can ship a
   single package at its root, or multiple under `packages/<id>/`.
   The app checks each package's required GStreamer elements against
-  your locally installed plugin set before letting you install it.
-  Example reference packages live at
+  your locally installed plugin set before letting you install. A
+  preview modal shows exactly which pipelines and variable defaults
+  will be added, flags any suspicious element names, and pins to a
+  commit SHA. Curated, ready-to-install packages live at
+  [gak4u/gst-graph-packages](https://github.com/gak4u/gst-graph-packages);
+  schema docs + small examples at
   [gak4u/gst-graph-package-examples](https://github.com/gak4u/gst-graph-package-examples).
+- **First-run GStreamer check.** If `gst-inspect-1.0` isn't on the
+  expected paths, the app shows a setup screen with platform-aware
+  install commands (Homebrew, apt/dnf/pacman, choco/installer) and a
+  recheck button — no terminal jumping required.
+- **Higher API limits via `gh`.** If the GitHub CLI is installed and
+  authenticated (`gh auth login`), the marketplace transparently uses
+  your token, bumping the GitHub search bucket from 10/min to 30/min
+  and core from 60/hr to 5000/hr. No token entry, no keychain prompt.
 
 ## Requirements
 
@@ -159,8 +179,17 @@ start` launches Electron against the built bundle.
 
 ### 1. Create a pipeline
 
-On the Home screen click `+ New Pipeline`, give it a name, and the
-editor opens.
+On the Home screen click `+ New Pipeline`. A chooser opens:
+
+- **Blank pipeline** — starts from an empty canvas.
+- **Start from an installed package** — lists every pipeline shipped
+  by your installed marketplace packages. Pick one to clone it with
+  fresh IDs. Packages whose pipelines have since been deleted offer a
+  "re-fetch" option that re-installs from the pinned SHA.
+
+The editor opens with the new pipeline. Use `← Home` in the toolbar
+to leave the editor at any time — that's not a delete; the pipeline
+stays on the Home screen.
 
 ### 2. Add elements
 
@@ -222,11 +251,14 @@ All state lives under `~/.gst-graph/`:
 
 ```
 ~/.gst-graph/
-├── pipelines.json       # your saved pipelines (atomic writes + .bak rotation)
-├── pipelines.json.bak   # previous revision, kept for recovery
-├── plugin-cache.json    # cached gst-inspect output (refreshed on version change)
-├── runs.json            # PIDs and metadata of currently-running pipelines
-└── mcp-http.json        # MCP HTTP server URL and port (only while Electron is running)
+├── pipelines.json           # your saved pipelines (atomic writes + .bak rotation)
+├── pipelines.json.bak       # previous revision, kept for recovery
+├── plugin-cache.json        # cached gst-inspect output (refreshed on version change)
+├── packages.json            # install records (repo, packageId, pinned SHA, pipelineIds)
+├── packages.json.bak        # previous revision of the install record
+├── marketplace-cache.json   # search result cache (TTL 1h, keyed by query + auth state)
+├── runs.json                # PIDs and metadata of currently-running pipelines
+└── mcp-http.json            # MCP HTTP server URL and port (only while Electron is running)
 ```
 
 The data directory and version are visible in the Home meta line, along
@@ -243,10 +275,25 @@ GitHub Search API for public repos tagged with the topic
 with a compatibility pill that compares the package's required elements
 against your locally cached `gst-inspect-1.0` plugin set.
 
+Clicking **Install…** opens a preview modal that lists every pipeline
+that will be added (with element / variable counts), every variable
+default that will be applied, any plugins still missing on your
+machine, and the pinned commit SHA. The install records the package in
+`~/.gst-graph/packages.json` so it later shows up in the "+ New
+Pipeline" chooser as a template.
+
 Search results are cached in `~/.gst-graph/marketplace-cache.json` for
-an hour (use **↻ Refresh** to invalidate). Unauthenticated GitHub
-requests are limited to 10 search calls per minute; setting a personal
-access token will be supported in a later milestone.
+an hour, keyed by query + auth state. Cached results never display a
+stale rate-limit number — click **↻ Refresh** for a live fetch.
+
+### GitHub API limits
+
+Unauthenticated GitHub requests are tight: 10 search calls per minute,
+60 core calls per hour. If the GitHub CLI is installed and authenticated
+(`gh auth login`), the app uses your existing OAuth token transparently
+— no token entry, no keychain prompt — and limits jump to 30 search /min
+and 5000 core/hr. The meta line in the marketplace header tells you
+which state you're in (`auth: gh` vs `anonymous`).
 
 ### Publishing a package
 
@@ -305,9 +352,13 @@ Minimal `gst-package.json`:
 The pipeline JSON files inside the package use exactly the same format
 the app exports today, so the easiest way to author a package is: build
 the pipeline in the editor, click `↓ Export`, drop the JSON into a
-`pipelines/` folder, and write the manifest. See
-[gak4u/gst-graph-package-examples](https://github.com/gak4u/gst-graph-package-examples)
-for working examples.
+`pipelines/` folder, and write the manifest.
+
+- [gak4u/gst-graph-packages](https://github.com/gak4u/gst-graph-packages)
+  — curated, ready-to-install collection (RTMP livestream, per-platform
+  webcam preview and screen recording).
+- [gak4u/gst-graph-package-examples](https://github.com/gak4u/gst-graph-package-examples)
+  — small reference examples plus schema docs for authoring your own.
 
 ## MCP integration
 
@@ -380,6 +431,7 @@ started by the agent can be stopped from the UI and vice versa.
 | `npm run mcp:build`  | Compile only the MCP/Electron Node side                |
 | `npm run mcp:smoke`  | Spawn the stdio MCP server and run an integration test |
 | `npm run mcp:smoke:http` | Boot the HTTP MCP server and check it                |
+| `npm run test:marketplace` | Unit tests for manifest parsing, compat checks, install transformer |
 | `npm run screenshots` | Rebuild and capture the README screenshots (uses a sandboxed temp HOME) |
 
 ## Architecture
@@ -401,8 +453,9 @@ started by the agent can be stopped from the UI and vice versa.
 │   React renderer (Vite)  │      │     ~/.gst-graph/           │
 │  - xyflow graph editor   │◀────▶│   pipelines.json + .bak     │
 │  - Zustand store         │      │   plugin-cache.json         │
-│  - HomeScreen / Inspector│      │   runs.json                 │
-│  - Live reload on extern │      │   mcp-http.json             │
+│  - HomeScreen / Inspector│      │   packages.json + .bak      │
+│  - Marketplace + Setup   │      │   marketplace-cache.json    │
+│  - Live reload on extern │      │   runs.json · mcp-http.json │
 └──────────────────────────┘      └─────────────────────────────┘
 ```
 
@@ -420,9 +473,16 @@ gst-graph/
 ├── electron/                 # Electron main and preload
 │   ├── main.ts               # IPC, persistence, file watcher, HTTP MCP server
 │   ├── preload.ts            # contextBridge surface
-│   └── gst/
-│       ├── inspect.ts        # gst-inspect-1.0 parser, plugin cache
-│       └── runner.ts         # builds gst-launch argv, spawns process
+│   ├── gst/
+│   │   ├── inspect.ts        # gst-inspect-1.0 parser, plugin cache
+│   │   ├── setup.ts          # GStreamer install detection + install hints
+│   │   └── runner.ts         # builds gst-launch argv, spawns process
+│   └── marketplace/
+│       ├── client.ts         # GitHub Search + raw fetch + repo resolution
+│       ├── cache.ts          # ~/.gst-graph/marketplace-cache.json
+│       ├── installs.ts       # packages.json read/write
+│       ├── auth.ts           # `gh auth token` integration
+│       └── index.ts          # searchMarketplace orchestration
 ├── mcp/                      # MCP server (stdio + HTTP)
 │   ├── data.ts               # ~/.gst-graph/ persistence helpers
 │   ├── builder.ts            # pure pipeline mutation helpers
@@ -432,13 +492,17 @@ gst-graph/
 │   ├── http.ts               # HTTP/SSE transport
 │   └── README.md             # MCP tool catalog and client config
 ├── shared/
-│   └── types.ts              # shared TypeScript types
+│   ├── types.ts              # shared TypeScript types
+│   ├── marketplace.ts        # package manifest + install types
+│   ├── marketplaceCheck.ts   # manifest parser + compatibility checker
+│   └── installApply.ts       # pure install transformer (ID remap, defaults)
 ├── src/                      # React renderer
 │   ├── components/           # ElementNode, VariableNode, TransformNode,
-│   │                         # HomeScreen, PropertiesPanel, Toolbar, etc.
+│   │                         # HomeScreen, PropertiesPanel, Toolbar,
+│   │                         # MarketplaceScreen, NewPipelineModal, SetupScreen
 │   ├── state/store.ts        # Zustand store, autosave, hydrate, reload
 │   └── lib/                  # caps compatibility, etc.
-├── scripts/                  # smoke tests (gst-launch + MCP)
+├── scripts/                  # smoke tests (gst-launch + MCP + marketplace)
 ├── package.json
 └── LICENSE
 ```
