@@ -18,6 +18,8 @@ function parseField(value: string): string[] | string {
   return trimmed.replace(/^\(string\)/, '').replace(/^"|"$/g, '');
 }
 
+const RANGE_OR_NUMERIC = /^[\[\d-]/;
+
 function structsCompatible(a: GstCapsStruct, b: GstCapsStruct): boolean {
   if (a.media !== b.media && a.media !== 'ANY' && b.media !== 'ANY') return false;
   for (const k of Object.keys(a.fields)) {
@@ -31,8 +33,9 @@ function structsCompatible(a: GstCapsStruct, b: GstCapsStruct): boolean {
     } else if (Array.isArray(bv) && typeof av === 'string') {
       if (!bv.includes(av)) return false;
     } else if (typeof av === 'string' && typeof bv === 'string') {
-      if (/^\d/.test(av) && /^\d/.test(bv)) continue;
-      if (av !== bv) return false;
+      if (av === bv) continue;
+      if (RANGE_OR_NUMERIC.test(av) || RANGE_OR_NUMERIC.test(bv)) continue;
+      return false;
     }
   }
   return true;
