@@ -277,6 +277,7 @@ export function HomeScreen() {
   const newPipeline = useStore((s) => s.newPipeline);
   const openPipeline = useStore((s) => s.openPipeline);
   const importPipeline = useStore((s) => s.importPipeline);
+  const setView = useStore((s) => s.setView);
   const toast = useStore((s) => s.toast);
   const dataDir = useStore((s) => s.dataDir);
   const gstVersion = useStore((s) => s.gstVersion);
@@ -335,6 +336,9 @@ export function HomeScreen() {
           </div>
         </div>
         <div className="home-header-actions">
+          <button onClick={() => setView('marketplace')} title="Browse the package marketplace">
+            🛒 Marketplace
+          </button>
           <button onClick={importJson} title="Import pipeline JSON files">
             ↑ Import
           </button>

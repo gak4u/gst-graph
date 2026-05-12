@@ -106,3 +106,30 @@ export interface ResolvedPackage {
   manifest: PackageManifest;
   pipelines: PipelineDef[];
 }
+
+export interface MarketplacePackageCard {
+  repo: string;
+  packageId: string;
+  manifest: PackageManifest;
+  repoStars: number;
+  repoDescription?: string;
+  defaultBranch: string;
+  pushedAt: string;
+  sha: string;
+  featured?: string;
+  compatibility: CompatibilityReport;
+}
+
+export interface MarketplaceRateLimitInfo {
+  remaining: number;
+  limit: number;
+  resetAt: number;
+}
+
+export interface MarketplaceSearchResult {
+  cards: MarketplacePackageCard[];
+  warnings: string[];
+  rateLimit?: MarketplaceRateLimitInfo;
+  fetchedAt: number;
+  cached: boolean;
+}

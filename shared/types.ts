@@ -200,6 +200,8 @@ export interface GstIpcApi {
   listExternalRuns(): Promise<
     Array<{ pipelineId: string; pid: number; source: 'mcp' | 'electron'; startedAt: number; command: string }>
   >;
+  marketplaceSearch(input: { query: string; forceRefresh?: boolean }): Promise<import('./marketplace').MarketplaceSearchResult>;
+  marketplaceClearCache(): Promise<{ ok: boolean }>;
 }
 
 declare global {

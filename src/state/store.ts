@@ -28,7 +28,7 @@ interface ToastMsg {
   text: string;
 }
 
-export type AppView = 'home' | 'editor';
+export type AppView = 'home' | 'editor' | 'marketplace';
 
 interface State {
   elements: GstElementSummary[];

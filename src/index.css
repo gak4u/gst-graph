@@ -1303,3 +1303,211 @@ input[type="radio"] {
 }
 .toast.err { border-left-color: var(--error); }
 .toast.warn { border-left-color: var(--warning); }
+
+.marketplace {
+  padding: 32px 40px 80px;
+  max-width: 1200px;
+  margin: 0 auto;
+  color: var(--fg);
+}
+.marketplace-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.marketplace-title-block {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.marketplace-title-block h1 {
+  margin: 0;
+  font-size: 22px;
+}
+.marketplace-meta {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.marketplace-meta code {
+  background: var(--bg-2);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.marketplace-search {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.marketplace-search input {
+  flex: 1;
+  padding: 10px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font-size: 13px;
+}
+.marketplace-search input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.marketplace-error {
+  background: rgba(255, 80, 80, 0.08);
+  border: 1px solid rgba(255, 80, 80, 0.3);
+  color: #ff8888;
+  padding: 10px 12px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+.marketplace-warnings {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.marketplace-warnings summary {
+  cursor: pointer;
+}
+.marketplace-warnings ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+.marketplace-empty {
+  text-align: center;
+  padding: 48px 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+.marketplace-empty-hint {
+  margin-top: 16px;
+  font-size: 12px;
+  max-width: 540px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.marketplace-empty-hint code {
+  background: var(--bg-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.marketplace-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 14px;
+}
+.marketplace-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.marketplace-card.warn { border-color: rgba(255, 180, 50, 0.4); }
+.marketplace-card.ok { border-color: rgba(80, 200, 120, 0.35); }
+.marketplace-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+.marketplace-card-title {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.marketplace-card-title h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.marketplace-card-sub {
+  font-size: 11px;
+  color: var(--muted);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.marketplace-card-sub .dot { opacity: 0.5; }
+.marketplace-card-body {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.marketplace-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.marketplace-tag {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--muted);
+}
+.marketplace-pill {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid;
+  white-space: nowrap;
+}
+.marketplace-pill.ok {
+  color: #6fcf97;
+  border-color: rgba(111, 207, 151, 0.5);
+}
+.marketplace-pill.warn {
+  color: #ffb84d;
+  border-color: rgba(255, 184, 77, 0.5);
+}
+.marketplace-pill.featured {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.marketplace-missing {
+  font-size: 11px;
+  background: rgba(255, 180, 50, 0.08);
+  border-left: 2px solid rgba(255, 180, 50, 0.6);
+  padding: 6px 8px;
+  border-radius: 0 3px 3px 0;
+}
+.marketplace-missing.optional {
+  background: rgba(160, 180, 220, 0.05);
+  border-left-color: rgba(160, 180, 220, 0.4);
+}
+.marketplace-card-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 4px;
+}
+.marketplace-card-actions a {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 12px;
+}
+.marketplace-card-actions a:hover { color: var(--fg); }
+.back-btn {
+  font-size: 12px;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.back-btn:hover { color: var(--fg); border-color: var(--accent); }
+.muted { color: var(--muted); }

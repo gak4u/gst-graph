@@ -33,6 +33,9 @@ const api: GstIpcApi = {
     return () => ipcRenderer.removeListener('gst:pipelinesChanged', listener);
   },
   listExternalRuns: () => ipcRenderer.invoke('gst:listExternalRuns'),
+  marketplaceSearch: (input: { query: string; forceRefresh?: boolean }) =>
+    ipcRenderer.invoke('gst:marketplaceSearch', input),
+  marketplaceClearCache: () => ipcRenderer.invoke('gst:marketplaceClearCache'),
 };
 
 contextBridge.exposeInMainWorld('gst', api);

@@ -5,6 +5,7 @@ import os from 'node:os';
 import { listElements, inspectElement, getGstVersion } from './gst/inspect';
 import { runner, buildCommand } from './gst/runner';
 import { startHttpMcpServer } from '../mcp/http';
+import { invalidateMarketplaceCache, searchMarketplace } from './marketplace';
 import type { LoadPipelinesResult, PersistedPipelines, PipelineDef } from '../shared/types';
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
@@ -342,3 +343,21 @@ ipcMain.handle('gst:savePipelines', async (_evt, data: PersistedPipelines) => {
 ipcMain.handle('gst:getDataDir', async () => DATA_DIR);
 
 ipcMain.handle('gst:listExternalRuns', async () => runner.listExternalRuns());
+
+ipcMain.handle(
+  'gst:marketplaceSearch',
+  async (_evt, input: { query: string; forceRefresh?: boolean }) => {
+    const c = await ensureCache();
+    return searchMarketplace({
+      query: input.query,
+      installedElements: c.elements.map((e) => e.name),
+      installedGstreamerVersion: c.version,
+      forceRefresh: !!input.forceRefresh,
+    });
+  },
+);
+
+ipcMain.handle('gst:marketplaceClearCache', async () => {
+  invalidateMarketplaceCache();
+  return { ok: true };
+});

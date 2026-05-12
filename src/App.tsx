@@ -6,6 +6,7 @@ import { PropertiesPanel } from './components/PropertiesPanel';
 import { ConsolePanel } from './components/ConsolePanel';
 import { Toolbar } from './components/Toolbar';
 import { HomeScreen } from './components/HomeScreen';
+import { MarketplaceScreen } from './components/MarketplaceScreen';
 import { useStore } from './state/store';
 
 export function App() {
@@ -33,6 +34,8 @@ export function App() {
     <div className={`app-root view-${view}`}>
       {view === 'home' ? (
         <HomeScreen />
+      ) : view === 'marketplace' ? (
+        <MarketplaceScreen />
       ) : (
         <div className="app">
           <Toolbar />
