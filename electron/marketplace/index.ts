@@ -38,10 +38,37 @@ async function mapWithLimit<T, U>(
   return results;
 }
 
+function rescoreCards(
+  cards: MarketplacePackageCard[],
+  installedElements: Iterable<string>,
+  installedGstreamerVersion: string | undefined,
+): MarketplacePackageCard[] {
+  const installedSet = new Set(installedElements);
+  const rescored = cards.map((card) => ({
+    ...card,
+    compatibility: checkCompatibility(card.manifest, {
+      installedElements: installedSet,
+      installedGstreamerVersion,
+    }),
+  }));
+  rescored.sort((a, b) => {
+    if (!!a.featured !== !!b.featured) return a.featured ? -1 : 1;
+    if (a.compatibility.compatible !== b.compatibility.compatible)
+      return a.compatibility.compatible ? -1 : 1;
+    return b.repoStars - a.repoStars;
+  });
+  return rescored;
+}
+
 export async function searchMarketplace(input: SearchInput): Promise<MarketplaceSearchResult> {
   if (!input.forceRefresh) {
     const hit = readSearch(input.query);
-    if (hit) return hit;
+    if (hit) {
+      return {
+        ...hit,
+        cards: rescoreCards(hit.cards, input.installedElements, input.installedGstreamerVersion),
+      };
+    }
   }
 
   const warnings: string[] = [];
