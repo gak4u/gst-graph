@@ -328,7 +328,16 @@ function IteratorTileTable({
                     const v = row[c.name];
                     return (
                       <td key={c.name}>
-                        {c.kind === 'boolean' ? (
+                        {c.kind === 'variable' ? (
+                          <KvKeyHomeDropdown
+                            pipelineId={pipelineId}
+                            variableRef={c.variableRef}
+                            value={v}
+                            onChange={(picked) =>
+                              setCell(pipelineId, nodeId, i, c.name, picked)
+                            }
+                          />
+                        ) : c.kind === 'boolean' ? (
                           <input
                             type="checkbox"
                             checked={v === true || v === 'true'}
@@ -393,19 +402,20 @@ function PipelineTile({ pipeline }: { pipeline: Pipeline }) {
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState(pipeline.name);
 
-  // Iterator-kind variables (list / record-list / kv) are by design meant to be
-  // configured by end users on the home tile, so they're always shown regardless of
-  // the `hidden` flag. Scalar variables (string / number / boolean) still respect it
-  // — that flag was originally for internal constants the developer doesn't want
-  // surfaced on the home screen.
-  const isIteratorKind = (k: VariableNodeData['valueKind']) =>
-    k === 'list' || k === 'record-list' || k === 'kv';
+  // `list` and `record-list` are end-user-facing configuration; they're meant to be
+  // edited on the home tile, so they always show regardless of `hidden`. `kv` and
+  // scalar (string/number/boolean) variables respect `hidden` — kv is typically a
+  // developer-curated preset library that end users shouldn't see directly, even
+  // though the iterator's variable-kind columns still resolve through it under the
+  // hood. Scalars use `hidden` for internal constants as before.
+  const isEndUserIteratorKind = (k: VariableNodeData['valueKind']) =>
+    k === 'list' || k === 'record-list';
   const variables = useMemo(
     () =>
       pipeline.nodes
         .filter((n) => n.type === 'gstVariable')
         .map((n) => ({ id: n.id, data: n.data as VariableNodeData }))
-        .filter((v) => isIteratorKind(v.data.valueKind) || !v.data.hidden),
+        .filter((v) => isEndUserIteratorKind(v.data.valueKind) || !v.data.hidden),
     [pipeline.nodes],
   );
 
@@ -415,7 +425,7 @@ function PipelineTile({ pipeline }: { pipeline: Pipeline }) {
         (n) =>
           n.type === 'gstVariable' &&
           (n.data as VariableNodeData).hidden &&
-          !isIteratorKind((n.data as VariableNodeData).valueKind),
+          !isEndUserIteratorKind((n.data as VariableNodeData).valueKind),
       ).length,
     [pipeline.nodes],
   );
@@ -700,5 +710,55 @@ export function HomeScreen() {
       )}
       {showNewModal ? <NewPipelineModal onClose={() => setShowNewModal(false)} /> : null}
     </div>
+  );
+}
+
+/** Cell editor for a variable-kind column on the Home tile. Resolves the kv variable
+ *  by id (looking through the parent pipeline) and renders a dropdown of its keys,
+ *  even when the kv itself is hidden from the home screen — we only need its data
+ *  to populate the dropdown, not to render the kv anywhere. */
+function KvKeyHomeDropdown({
+  pipelineId,
+  variableRef,
+  value,
+  onChange,
+}: {
+  pipelineId: string;
+  variableRef: string | undefined;
+  value: string | number | boolean | null | undefined;
+  onChange: (key: string) => void;
+}) {
+  const pipeline = useStore((s) => s.pipelines.find((p) => p.id === pipelineId));
+  const kvNode = pipeline?.nodes.find((n) => n.id === variableRef);
+  const kvData = kvNode?.type === 'gstVariable' ? (kvNode.data as VariableNodeData) : null;
+  const map: Record<string, string> | null =
+    kvData &&
+    kvData.valueKind === 'kv' &&
+    kvData.value &&
+    typeof kvData.value === 'object' &&
+    !Array.isArray(kvData.value)
+      ? (kvData.value as Record<string, string>)
+      : null;
+  if (!map) {
+    return (
+      <span className="muted" style={{ fontSize: 10 }}>
+        kv ref missing
+      </span>
+    );
+  }
+  const keys = Object.keys(map);
+  return (
+    <select
+      value={value === null || value === undefined ? '' : String(value)}
+      onChange={(e) => onChange(e.target.value)}
+      style={{ width: '100%' }}
+    >
+      <option value="">— pick —</option>
+      {keys.map((k) => (
+        <option key={k} value={k}>
+          {k}
+        </option>
+      ))}
+    </select>
   );
 }
