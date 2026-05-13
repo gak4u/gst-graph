@@ -84,13 +84,17 @@ export interface PipelineNodeData {
   [k: string]: unknown;
 }
 
-export type VariableValueKind = 'string' | 'number' | 'boolean';
+export type VariableValueKind = 'string' | 'number' | 'boolean' | 'list';
+
+// A list-typed variable holds an array of primitives. Items must be all strings, all numbers,
+// or all booleans (we don't support mixed-type lists). Used as the iterator for a GroupDef.
+export type VariableListValue = string[] | number[] | boolean[];
 
 export interface VariableNodeData {
   varName: string;
   label?: string;
   valueKind: VariableValueKind;
-  value: string | number | boolean | null;
+  value: string | number | boolean | VariableListValue | null;
   description?: string;
   hidden?: boolean;
   [k: string]: unknown;
@@ -140,6 +144,46 @@ export type PipelineGraphNode =
       data: TransformNodeData;
     };
 
+/** A property on a member node whose value varies per iteration of a loop group.
+ *  At unroll time, the i-th clone's `data.properties[propertyKey]` is set to the
+ *  i-th element of the iterator variable's list value. */
+export interface GroupParameter {
+  /** Member node whose property is varied. */
+  targetNodeId: string;
+  /** Property name on that node (e.g. "location"). */
+  propertyKey: string;
+}
+
+/** A pad on the group container that forwards to a member node's pad on unroll.
+ *  Cached on disk so the renderer can place handles without re-scanning every edge. */
+export interface GroupBoundaryPad {
+  /** Handle ID exposed on the group container, e.g. "sink:video_in" / "src:out_0".
+   *  Must be unique within a group. */
+  handleId: string;
+  direction: PadDirection;
+  /** Which member node this boundary handle forwards to. */
+  memberNodeId: string;
+  /** Pad name on that member node (e.g. "video"). For request-pad templates the
+   *  group emits N edges that omit the source-pad suffix at unroll, letting
+   *  gst-launch auto-allocate fresh request pads on the upstream tee. */
+  memberPadName: string;
+}
+
+export interface GroupDef {
+  id: string;
+  name: string;
+  /** Element & variable nodes that belong to this group's prototype. */
+  memberNodeIds: string[];
+  /** ID of a gstVariable node whose value is a list. Count = list.length. */
+  iteratorVarId: string;
+  /** Property bindings varied per iteration. Each parameter is one column;
+   *  iteration i gets element i of the iterator list. */
+  parameters: GroupParameter[];
+  /** Cached boundary pads exposed on the container — derived from edges that
+   *  cross the boundary. */
+  boundary: GroupBoundaryPad[];
+}
+
 export interface PipelineDef {
   id: string;
   name: string;
@@ -154,6 +198,8 @@ export interface PipelineDef {
     className?: string;
     animated?: boolean;
   }>;
+  /** Loop groups defined on this pipeline. Absent on legacy pipelines. */
+  groups?: GroupDef[];
 }
 
 export interface RunStatus {

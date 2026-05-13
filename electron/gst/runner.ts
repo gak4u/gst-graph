@@ -1,6 +1,7 @@
 import { spawn, ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { clearRun, isPidAlive, pruneDeadRuns, readRuns, setRun } from '../../mcp/data';
+import { expandGroups, diagnoseGroups, GroupExpansionError } from '../../shared/groupExpand';
 import type {
   PipelineDef,
   PipelineGraphNode,
@@ -95,6 +96,9 @@ function sanitizePipeline(def: PipelineDef): { def: PipelineDef; warnings: strin
 
 function variableRawValue(d: VariableNodeData): string | number | boolean | null {
   if (d.value === null || d.value === undefined) return null;
+  // List values are only meaningful as group iterators, not as scalar property bindings.
+  // Surface as null so the binding diagnostics complain instead of stringifying "[…]".
+  if (d.valueKind === 'list' || Array.isArray(d.value)) return null;
   if (d.valueKind === 'boolean') return d.value === true || d.value === 'true';
   if (d.valueKind === 'number') {
     if (typeof d.value === 'number') return Number.isFinite(d.value) ? d.value : null;
@@ -390,9 +394,17 @@ function* walkTokens(def: PipelineDef): Generator<Token> {
   }
 }
 
+/** Run the unroll pre-pass before walking. Group definitions are expanded into N copies
+ *  of their members per iteration; the resulting flat PipelineDef has no `groups[]`. */
+function prepareForWalk(def: PipelineDef): PipelineDef {
+  if (!def.groups || def.groups.length === 0) return def;
+  return expandGroups(def);
+}
+
 export function buildArgs(def: PipelineDef): string[] {
+  const prepared = prepareForWalk(def);
   const args: string[] = [];
-  for (const tok of walkTokens(def)) {
+  for (const tok of walkTokens(prepared)) {
     if (tok.kind === 'link') {
       args.push('!');
     } else if (tok.kind === 'word') {
@@ -413,7 +425,7 @@ export function diagnoseBindings(def: PipelineDef): string[] {
       .map((n) => n.id),
   );
   const valueGraph = buildValueGraph(def);
-  const messages: string[] = [];
+  const messages: string[] = [...diagnoseGroups(def)];
   for (const e of def.edges) {
     const isBinding =
       e.data?.edgeKind === 'binding' || e.targetHandle?.startsWith('prop:');
@@ -453,8 +465,17 @@ function shellQuoteIfNeeded(value: string): string {
 }
 
 export function buildCommand(def: PipelineDef): string {
+  let prepared: PipelineDef;
+  try {
+    prepared = prepareForWalk(def);
+  } catch (e) {
+    if (e instanceof GroupExpansionError) {
+      return `# group "${e.groupId}" error: ${e.message}`;
+    }
+    throw e;
+  }
   const parts: string[] = [];
-  for (const tok of walkTokens(def)) {
+  for (const tok of walkTokens(prepared)) {
     if (tok.kind === 'link') {
       parts.push('!');
     } else if (tok.kind === 'word') {

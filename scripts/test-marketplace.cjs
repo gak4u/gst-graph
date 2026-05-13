@@ -21,6 +21,7 @@ function build() {
       path.join(PROJECT, 'shared', 'marketplace.ts'),
       path.join(PROJECT, 'shared', 'marketplaceCheck.ts'),
       path.join(PROJECT, 'shared', 'installApply.ts'),
+      path.join(PROJECT, 'shared', 'groupExpand.ts'),
       path.join(PROJECT, 'shared', 'types.ts'),
     ],
     { stdio: 'inherit' },
@@ -44,6 +45,10 @@ const {
   normalizeStreamEdgeHandle,
   PipelineShapeError,
 } = require(path.join(BUILD_DIR, 'installApply.js'));
+const { expandGroups, diagnoseGroups, GroupExpansionError } = require(path.join(
+  BUILD_DIR,
+  'groupExpand.js',
+));
 
 let failures = 0;
 function assert(ok, label) {
@@ -411,6 +416,220 @@ const prefixedPlan = applyPackageInstall({
 const prefixedStream = prefixedPlan.newPipelines[0].edges[0];
 assert(prefixedStream.sourceHandle === 'src:src', 'already-prefixed stream edge kept');
 assert(prefixedStream.targetHandle === 'sink:sink', 'already-prefixed stream edge kept');
+
+// ===========================================================================
+// Loop groups (expandGroups)
+// ===========================================================================
+group('loop-group unroll');
+
+function el(id, name, inst, props = {}) {
+  return {
+    id,
+    type: 'gstElement',
+    position: { x: 0, y: 0 },
+    data: { elementName: name, instanceName: inst, properties: props },
+  };
+}
+function varNode(id, varName, valueKind, value) {
+  return {
+    id,
+    type: 'gstVariable',
+    position: { x: 0, y: 0 },
+    data: { varName, valueKind, value },
+  };
+}
+function mkStreamEdge(id, src, dst, srcPad = 'src', sinkPad = 'sink') {
+  return {
+    id,
+    source: src,
+    target: dst,
+    sourceHandle: `src:${srcPad}`,
+    targetHandle: `sink:${sinkPad}`,
+    data: { edgeKind: 'stream', sourcePad: srcPad, targetPad: sinkPad },
+  };
+}
+
+// Three-instance fanout: vtee → flvmux+queue+rtmp2sink × 3 (the user's actual case)
+function buildFanoutDef(locations) {
+  const groupId = 'g_rtmp';
+  return {
+    id: 'pl_fanout',
+    name: 'Fanout',
+    nodes: [
+      el('vtee', 'tee', 'vtee'),
+      varNode('var_locs', 'locations', 'list', locations),
+      // Group members — one prototype branch
+      el('flv', 'flvmux', 'flvmux1', { streamable: true }),
+      el('q', 'queue', 'queue1'),
+      el('rtmp', 'rtmp2sink', 'rtmp2sink1', { location: '<placeholder>' }),
+      // Group container — addressed by groupId, only the boundary handles matter
+      {
+        id: groupId,
+        type: 'gstElement', // container is rendered separately; for the def shape we leave the
+                            // container as a non-member element node to allow `def.edges` to
+                            // reference it. (Renderer treats it as a `gstGroup` based on data.)
+        position: { x: 0, y: 0 },
+        data: { elementName: '__group__', instanceName: groupId, properties: {} },
+      },
+    ],
+    edges: [
+      // External edge: vtee → group container's "video_in" boundary handle
+      {
+        id: 'e_video',
+        source: 'vtee',
+        target: groupId,
+        sourceHandle: 'src:src_%u',
+        targetHandle: 'sink:video_in',
+        data: { edgeKind: 'stream' },
+      },
+      // Internal edges between member nodes
+      mkStreamEdge('e_flv_q', 'flv', 'q'),
+      mkStreamEdge('e_q_rtmp', 'q', 'rtmp'),
+    ],
+    groups: [
+      {
+        id: groupId,
+        name: 'RTMP Out',
+        memberNodeIds: ['flv', 'q', 'rtmp'],
+        iteratorVarId: 'var_locs',
+        parameters: [{ targetNodeId: 'rtmp', propertyKey: 'location' }],
+        boundary: [
+          {
+            handleId: 'sink:video_in',
+            direction: 'sink',
+            memberNodeId: 'flv',
+            memberPadName: 'video',
+          },
+        ],
+      },
+    ],
+  };
+}
+
+// Three-iteration case
+{
+  const def = buildFanoutDef(['rtmp://a/1', 'rtmp://b/2', 'rtmp://c/3']);
+  const expanded = expandGroups(def);
+  // Container + 3 prototype members should be gone; 3×3 = 9 cloned element nodes plus
+  // the unchanged vtee and the variable node should remain.
+  const elementClones = expanded.nodes.filter(
+    (n) => n.type === 'gstElement' && n.data.elementName !== '__group__',
+  );
+  assert(elementClones.length === 10, `3-iter: cloned + non-group elements = 10 (got ${elementClones.length})`);
+  // The original member nodes ('flv','q','rtmp') should not survive
+  assert(
+    !expanded.nodes.some((n) => n.id === 'flv' || n.id === 'q' || n.id === 'rtmp'),
+    '3-iter: original member ids removed',
+  );
+  // Container should not survive
+  assert(!expanded.nodes.some((n) => n.id === 'g_rtmp'), '3-iter: container removed');
+  // Three cloned rtmp2sink nodes with location property set
+  const rtmpClones = elementClones.filter(
+    (n) => n.data.elementName === 'rtmp2sink',
+  );
+  assert(rtmpClones.length === 3, `3-iter: three rtmp2sink clones (got ${rtmpClones.length})`);
+  const locations = rtmpClones.map((n) => n.data.properties.location).sort();
+  assert(
+    JSON.stringify(locations) === JSON.stringify(['rtmp://a/1', 'rtmp://b/2', 'rtmp://c/3']),
+    '3-iter: each clone gets unique location',
+  );
+  // Instance names suffixed
+  const muxClones = elementClones.filter((n) => n.data.elementName === 'flvmux');
+  const muxNames = muxClones.map((n) => n.data.instanceName).sort();
+  assert(
+    JSON.stringify(muxNames) === JSON.stringify(['flvmux1_0', 'flvmux1_1', 'flvmux1_2']),
+    '3-iter: flvmux instance names suffixed',
+  );
+  // Internal edges replicated: flv→q and q→rtmp per iteration = 6 total
+  const internalReplicated = expanded.edges.filter(
+    (e) => /__i\d+$/.test(e.id),
+  );
+  assert(internalReplicated.length === 6, `3-iter: 6 internal-edge clones (got ${internalReplicated.length})`);
+  // Boundary edge expanded to 3 — one per iteration, each pointing at a flvmux clone
+  const boundaryReplicated = expanded.edges.filter((e) => /__tgt\d+$/.test(e.id));
+  assert(boundaryReplicated.length === 3, `3-iter: 3 boundary-edge clones (got ${boundaryReplicated.length})`);
+  // Each boundary clone targets a flvmux clone with sink:video
+  const targetsAllMux = boundaryReplicated.every(
+    (e) => e.targetHandle === 'sink:video' && expanded.nodes.find((n) => n.id === e.target)?.data.elementName === 'flvmux',
+  );
+  assert(targetsAllMux, '3-iter: boundary edges land on flvmux.video');
+  // Source side untouched so the parser auto-allocates fresh tee src pads
+  const sourcesUntouched = boundaryReplicated.every((e) => e.source === 'vtee' && e.sourceHandle === 'src:src_%u');
+  assert(sourcesUntouched, '3-iter: boundary edge sources kept (parser auto-allocates)');
+}
+
+// Zero-iteration case: empty list yields a no-op group (members dropped, edges dropped)
+{
+  const def = buildFanoutDef([]);
+  const expanded = expandGroups(def);
+  const elementClones = expanded.nodes.filter(
+    (n) => n.type === 'gstElement' && n.data.elementName !== '__group__',
+  );
+  // Only the vtee element survives among element nodes
+  assert(elementClones.length === 1, `0-iter: only outside element (vtee) survives (got ${elementClones.length})`);
+  // Diagnostics flag empty iterator
+  const diag = diagnoseGroups(def);
+  assert(diag.some((m) => /empty iterator/i.test(m)), '0-iter: diagnoseGroups flags empty list');
+}
+
+// Missing iterator: throws GroupExpansionError
+{
+  const def = buildFanoutDef(['rtmp://a/1']);
+  // Remove iterator var
+  def.nodes = def.nodes.filter((n) => n.id !== 'var_locs');
+  let threw = null;
+  try {
+    expandGroups(def);
+  } catch (e) {
+    threw = e;
+  }
+  assert(threw instanceof GroupExpansionError, 'missing iterator: throws GroupExpansionError');
+  // diagnoseGroups should surface a message, not throw
+  const diag = diagnoseGroups(def);
+  assert(diag.length >= 1, 'missing iterator: diagnoseGroups surfaces message');
+}
+
+// Non-list value: caught
+{
+  const def = buildFanoutDef(['rtmp://a/1']);
+  // Replace the iterator var with a scalar
+  const v = def.nodes.find((n) => n.id === 'var_locs');
+  v.data.valueKind = 'string';
+  v.data.value = 'rtmp://a/1';
+  let threw = null;
+  try {
+    expandGroups(def);
+  } catch (e) {
+    threw = e;
+  }
+  assert(threw instanceof GroupExpansionError, 'scalar iterator: throws GroupExpansionError');
+}
+
+// One-iteration: behaves like ungrouped (1 of each cloned element)
+{
+  const def = buildFanoutDef(['rtmp://only/one']);
+  const expanded = expandGroups(def);
+  const muxClones = expanded.nodes.filter((n) => n.type === 'gstElement' && n.data.elementName === 'flvmux');
+  assert(muxClones.length === 1, `1-iter: one flvmux clone (got ${muxClones.length})`);
+  const rtmpClones = expanded.nodes.filter((n) => n.type === 'gstElement' && n.data.elementName === 'rtmp2sink');
+  assert(rtmpClones.length === 1, `1-iter: one rtmp2sink clone (got ${rtmpClones.length})`);
+  assert(rtmpClones[0].data.properties.location === 'rtmp://only/one', '1-iter: location set to single list value');
+  const boundary = expanded.edges.filter((e) => /__tgt0$/.test(e.id));
+  assert(boundary.length === 1, '1-iter: one boundary clone edge');
+}
+
+// No groups: pass-through (deep copy semantics not required, but groups[] must be empty)
+{
+  const def = {
+    id: 'pl', name: 'plain',
+    nodes: [el('a', 'videotestsrc', 'src0'), el('b', 'autovideosink', 'sink0')],
+    edges: [mkStreamEdge('e', 'a', 'b')],
+  };
+  const out = expandGroups(def);
+  assert(out.nodes.length === 2, 'no-groups: nodes unchanged');
+  assert(out.edges.length === 1, 'no-groups: edges unchanged');
+  assert((out.groups || []).length === 0, 'no-groups: groups[] empty');
+}
 
 console.log('');
 if (failures > 0) {
