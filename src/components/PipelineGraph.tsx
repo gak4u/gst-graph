@@ -277,12 +277,13 @@ function GraphInner() {
         onConnect={onConnect}
         isValidConnection={isValidConnection}
         fitView
-        // Left-mouse drag on empty canvas = rubber-band select. Middle / right mouse
-        // (button 1 / 2) pans, scroll/pinch zooms. Avoids the xyflow Shift+drag
-        // ambiguity where the pan handler eats the event before selection sees it.
-        selectionOnDrag
-        panOnDrag={[1, 2]}
+        // Pan with left-drag (xyflow default). Hold Shift to draw a selection box
+        // on empty canvas. Scroll / pinch zooms. Connections always start from a
+        // handle regardless. Going back to the default model because the
+        // `selectionOnDrag` + restricted-pan combo broke handle drag-to-connect.
+        selectionKeyCode="Shift"
         selectionMode={SelectionMode.Partial}
+        connectionRadius={30}
         proOptions={{ hideAttribution: true }}
       >
         <Background gap={18} size={1} color="#2c303a" />
