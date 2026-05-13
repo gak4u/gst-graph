@@ -212,28 +212,68 @@ function* walkTokens(def: PipelineDef): Generator<Token> {
   );
   const valueGraph = buildValueGraph(def);
   const nodeMap = new Map(elementNodes.map((n) => [n.id, n]));
-  const outgoing = new Map<string, string[]>();
-  const incoming = new Map<string, string[]>();
+  type StreamEdge = PipelineDef['edges'][number];
+  type OutEdge = { target: string; edge: StreamEdge };
+  type InEdge = { source: string; edge: StreamEdge };
+  const outgoing = new Map<string, OutEdge[]>();
+  const incoming = new Map<string, InEdge[]>();
   for (const n of elementNodes) {
     outgoing.set(n.id, []);
     incoming.set(n.id, []);
   }
-  function isStreamEdge(e: PipelineDef['edges'][number]): boolean {
+  function isStreamEdge(e: StreamEdge): boolean {
     if (e.data?.edgeKind === 'binding' || e.data?.edgeKind === 'value') return false;
     if (!e.sourceHandle?.startsWith('src:')) return false;
     if (!e.targetHandle?.startsWith('sink:')) return false;
     return nodeMap.has(e.source) && nodeMap.has(e.target);
   }
-  function isPropertyBindingEdge(e: PipelineDef['edges'][number]): boolean {
+  function isPropertyBindingEdge(e: StreamEdge): boolean {
     if (e.targetHandle?.startsWith('prop:')) return true;
     if (e.data?.edgeKind === 'binding') return true;
     return false;
   }
+  function padOf(handle: string | null | undefined, prefix: 'src:' | 'sink:'): string | null {
+    if (!handle || !handle.startsWith(prefix)) return null;
+    return handle.slice(prefix.length);
+  }
+  // Pad template placeholders like `src_%u`/`sink_%d` aren't real pad names — they're the
+  // template the element exposes for dynamic request pads. Treat them as the default
+  // auto-allocated pad so gst-launch is left to request a fresh pad.
+  const isTemplatePlaceholder = (name: string | null): boolean =>
+    !!name && /[%]/.test(name);
+  const srcPadOf = (e: StreamEdge): string | null => {
+    const p = padOf(e.sourceHandle, 'src:');
+    return isTemplatePlaceholder(p) ? null : p;
+  };
+  const sinkPadOf = (e: StreamEdge): string | null => {
+    const p = padOf(e.targetHandle, 'sink:');
+    return isTemplatePlaceholder(p) ? null : p;
+  };
+  // A pad name is "explicit" if it isn't the default static name. For default
+  // static pads we leave the suffix off so the parser auto-negotiates.
+  const isExplicitPad = (name: string | null): boolean =>
+    !!name && name !== 'src' && name !== 'sink';
 
+  // Stream edges keyed so a stale duplicate (e.g. saved `src_%u` left over alongside an
+  // allocated `src_0`) doesn't make us emit two links to the same target sink pad.
+  const seenEdgeKeys = new Set<string>();
   for (const e of def.edges) {
     if (!isStreamEdge(e)) continue;
-    outgoing.get(e.source)?.push(e.target);
-    incoming.get(e.target)?.push(e.source);
+    const sPad = srcPadOf(e);
+    const tPad = sinkPadOf(e);
+    // Coalesce by (source, target, normalized-source-pad, target-pad). Different target
+    // pads on the same target (flvmux.video vs flvmux.audio) are kept distinct; multiple
+    // edges to the same target pad collapse to one.
+    const key = `${e.source}${e.target}${sPad ?? ''}${tPad ?? ''}`;
+    if (seenEdgeKeys.has(key)) continue;
+    // Also collapse when the source pad differs but the target pad is the same — same
+    // physical link on the destination side.
+    const padKey = `${e.source}${e.target}${tPad ?? ''}`;
+    if (seenEdgeKeys.has(padKey)) continue;
+    seenEdgeKeys.add(key);
+    seenEdgeKeys.add(padKey);
+    outgoing.get(e.source)?.push({ target: e.target, edge: e });
+    incoming.get(e.target)?.push({ source: e.source, edge: e });
   }
 
   const bindingByTarget = new Map<string, Map<string, string>>();
@@ -252,6 +292,21 @@ function* walkTokens(def: PipelineDef): Generator<Token> {
 
   const sourceNodes = elementNodes.filter((n) => (incoming.get(n.id) || []).length === 0);
   const visited = new Set<string>();
+
+  // Elements that must be declared standalone (and referenced via backref-with-pad-name from
+  // upstream) rather than inlined mid-chain: anything with multiple incoming stream edges, or
+  // any element with an incoming edge that targets a non-default request pad like flvmux.video.
+  // Mid-chain `! flvmux.video name=mux1 ...` isn't valid gst-launch syntax, so we have to hoist
+  // these declarations and link to them by backref.
+  const sharedSinks = new Set<string>();
+  for (const [targetId, list] of incoming) {
+    if (!instanceNameOf(targetId)) continue;
+    if (list.length > 1) {
+      sharedSinks.add(targetId);
+    } else if (list.some(({ edge }) => isExplicitPad(sinkPadOf(edge)))) {
+      sharedSinks.add(targetId);
+    }
+  }
 
   function instanceNameOf(id: string): string | null {
     const n = nodeMap.get(id);
@@ -289,35 +344,46 @@ function* walkTokens(def: PipelineDef): Generator<Token> {
     }
   }
 
-  function* walk(id: string, withPrefixLink: boolean): Generator<Token> {
+  function backrefSuffix(pad: string | null): string {
+    return isExplicitPad(pad) ? pad! : '';
+  }
+
+  function* walk(id: string, withPrefixLink: boolean, sinkPad: string | null = null): Generator<Token> {
     if (!nodeMap.has(id)) return;
     if (visited.has(id)) {
       const inst = instanceNameOf(id);
       if (!inst) return;
       if (withPrefixLink) yield { kind: 'link' };
-      yield { kind: 'word', value: `${inst}.` };
+      yield { kind: 'word', value: `${inst}.${backrefSuffix(sinkPad)}` };
       return;
     }
     visited.add(id);
     if (withPrefixLink) yield { kind: 'link' };
     yield* emitNode(id);
-    const outs = (outgoing.get(id) || []).filter((next) => nodeMap.has(next));
+    const outs = (outgoing.get(id) || []).filter(({ target }) => nodeMap.has(target));
     if (outs.length === 0) return;
     if (outs.length === 1) {
-      yield* walk(outs[0], true);
+      yield* walk(outs[0].target, true, sinkPadOf(outs[0].edge));
       return;
     }
     const inst = instanceNameOf(id);
     if (!inst) {
-      for (const next of outs) yield* walk(next, true);
+      for (const { target, edge } of outs) yield* walk(target, true, sinkPadOf(edge));
       return;
     }
-    for (const next of outs) {
-      yield { kind: 'word', value: `${inst}.` };
-      yield* walk(next, true);
+    for (const { target, edge } of outs) {
+      const srcPad = srcPadOf(edge);
+      yield { kind: 'word', value: `${inst}.${backrefSuffix(srcPad)}` };
+      yield* walk(target, true, sinkPadOf(edge));
     }
   }
 
+  // Emit shared sinks first so their downstream chain is declared once, then DFS from real
+  // sources will hit them as already-visited and produce `name.padName` backrefs.
+  for (const id of sharedSinks) {
+    if (visited.has(id)) continue;
+    yield* walk(id, false);
+  }
   for (const s of sourceNodes) yield* walk(s.id, false);
   for (const n of elementNodes) {
     if (!visited.has(n.id)) yield* walk(n.id, false);
