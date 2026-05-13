@@ -12,10 +12,12 @@ export function Toolbar() {
   const setView = useStore((s) => s.setView);
   const [cmdPreview, setCmdPreview] = useState<string | null>(null);
 
+  // Any selected element / variable / transform node is eligible. Group containers
+  // can't be members of another group (no nested groups in v1) so they're excluded.
   const selectedElementIds = (pipeline?.nodes || [])
     .filter(
       (n) =>
-        n.type === 'gstElement' &&
+        n.type !== 'gstGroup' &&
         (n as unknown as { selected?: boolean }).selected === true,
     )
     .map((n) => n.id);

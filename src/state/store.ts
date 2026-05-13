@@ -703,11 +703,18 @@ export const useStore = create<State>((set, get) => ({
         }
       }
     }
-    // Reject if member set isn't all gstElement nodes (v1 only groups element nodes)
+    // Accept any node type except another group container. Variables and transforms
+    // can live inside; their binding/value edges replicate per iteration alongside
+    // stream edges. The iterator variable must NOT be a member — it would get cloned
+    // along with the prototype and stop being addressable as a single iterator.
     for (const m of memberNodeIds) {
       const node = active.nodes.find((n) => n.id === m);
-      if (!node || node.type !== 'gstElement') {
-        get().toast('Groups currently only accept element nodes', 'err');
+      if (!node) {
+        get().toast('Group member not found', 'err');
+        return null;
+      }
+      if (node.type === 'gstGroup') {
+        get().toast('Nested groups are not supported yet', 'err');
         return null;
       }
     }
@@ -805,6 +812,14 @@ export const useStore = create<State>((set, get) => ({
   setGroupIterator: (groupId, variableNodeId) => {
     const active = get().pipelines.find((p) => p.id === get().activePipelineId);
     if (!active) return;
+    const group = (active.groups || []).find((g) => g.id === groupId);
+    if (group && variableNodeId && group.memberNodeIds.includes(variableNodeId)) {
+      get().toast(
+        'Iterator variable must live outside this group — it drives the loop, so it cannot be one of the cloned members.',
+        'err',
+      );
+      return;
+    }
     get().updatePipeline(active.id, (p) => {
       p.groups = (p.groups || []).map((g) =>
         g.id === groupId ? { ...g, iteratorVarId: variableNodeId } : g,
@@ -847,14 +862,25 @@ export const useStore = create<State>((set, get) => ({
 /** Walk a pipeline's edges and synthesize a stable list of boundary pads for a member set.
  *  Each boundary pad keeps the inner pad name; we rename only the handle ID prefix to make
  *  the container's handles distinct (`<dir>:<member>_<pad>`).
- *  Re-run any time member edges change so cached boundary[] stays in sync. */
+ *  Re-run any time member edges change so cached boundary[] stays in sync.
+ *
+ *  Only stream edges contribute to boundary handles. Binding edges (`prop:<name>`) and
+ *  value edges (`in:<input>`) crossing the boundary aren't supported in v1 — they're
+ *  silently dropped from the boundary calc; the editor surfaces them as detached if the
+ *  user makes that mistake. */
 function computeGroupBoundary(
   pipeline: PipelineDef,
   memberSet: Set<string>,
 ): GroupBoundaryPad[] {
   const boundary: GroupBoundaryPad[] = [];
   const seenIds = new Set<string>();
+  const isStreamEdge = (e: PipelineDef['edges'][number]) =>
+    e.sourceHandle?.startsWith('src:') &&
+    e.targetHandle?.startsWith('sink:') &&
+    e.data?.edgeKind !== 'binding' &&
+    e.data?.edgeKind !== 'value';
   for (const e of pipeline.edges) {
+    if (!isStreamEdge(e)) continue;
     const srcInside = memberSet.has(e.source);
     const tgtInside = memberSet.has(e.target);
     if (srcInside === tgtInside) continue; // internal or external
