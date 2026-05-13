@@ -393,19 +393,29 @@ function PipelineTile({ pipeline }: { pipeline: Pipeline }) {
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState(pipeline.name);
 
+  // Iterator-kind variables (list / record-list / kv) are by design meant to be
+  // configured by end users on the home tile, so they're always shown regardless of
+  // the `hidden` flag. Scalar variables (string / number / boolean) still respect it
+  // — that flag was originally for internal constants the developer doesn't want
+  // surfaced on the home screen.
+  const isIteratorKind = (k: VariableNodeData['valueKind']) =>
+    k === 'list' || k === 'record-list' || k === 'kv';
   const variables = useMemo(
     () =>
       pipeline.nodes
         .filter((n) => n.type === 'gstVariable')
         .map((n) => ({ id: n.id, data: n.data as VariableNodeData }))
-        .filter((v) => !v.data.hidden),
+        .filter((v) => isIteratorKind(v.data.valueKind) || !v.data.hidden),
     [pipeline.nodes],
   );
 
   const hiddenCount = useMemo(
     () =>
       pipeline.nodes.filter(
-        (n) => n.type === 'gstVariable' && (n.data as VariableNodeData).hidden,
+        (n) =>
+          n.type === 'gstVariable' &&
+          (n.data as VariableNodeData).hidden &&
+          !isIteratorKind((n.data as VariableNodeData).valueKind),
       ).length,
     [pipeline.nodes],
   );
