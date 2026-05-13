@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo } from 'react';
 import { Handle, Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import { useStore } from '../state/store';
 import type {
@@ -16,18 +16,24 @@ export const GroupNode = memo(({ id, selected }: NodeProps) => {
   const group: GroupDef | undefined = pipeline?.groups?.find((g) => g.id === id);
   const updateNodeInternals = useUpdateNodeInternals();
 
-  // Tell xyflow to remeasure this node every time the boundary changes (and after
-  // hydration when this component first sees the saved boundary). Without this,
-  // boundary handles that load from disk are registered too late for the existing
-  // edges that point at them — the edges render as floating lines that don't
-  // anchor, and new connection drags onto them silently fail.
+  // Tell xyflow to remeasure this node every time the boundary changes. Without this,
+  // boundary handles that arrive after the initial mount (hydration, post-edit, or
+  // the `add-input-queues` patch script) are registered too late for the edges that
+  // point at them — they render as floating lines that don't anchor and new drag
+  // connections onto them silently fail. We fire on both `useLayoutEffect` (so it
+  // runs before paint, catching the initial mount) and `useEffect` + rAF (so we
+  // re-fire after the browser has actually laid the handles out in the DOM).
   const boundaryKey = useMemo(
     () =>
       (group?.boundary || []).map((b) => `${b.direction}:${b.handleId}`).join('|'),
     [group?.boundary],
   );
-  useEffect(() => {
+  useLayoutEffect(() => {
     updateNodeInternals(id);
+  }, [id, boundaryKey, updateNodeInternals]);
+  useEffect(() => {
+    const handle = requestAnimationFrame(() => updateNodeInternals(id));
+    return () => cancelAnimationFrame(handle);
   }, [id, boundaryKey, updateNodeInternals]);
 
   const iteratorMeta = useMemo(() => {
@@ -81,7 +87,11 @@ export const GroupNode = memo(({ id, selected }: NodeProps) => {
         </span>
       </div>
       <div className="group-node-meta">{iteratorMeta.label}</div>
-      <div className="group-node-body">
+      {/* React `key` on the body forces unmount + remount of every Handle child when the
+          boundary signature changes. xyflow's Handle component registers itself in the
+          flow store on mount and de-registers on unmount, so a fresh mount cycle wipes
+          any stale handle entry left over from an earlier boundary spec. */}
+      <div className="group-node-body" key={boundaryKey}>
         <div className="group-node-pads sink">
           {sinkBoundary.length === 0 && <div className="group-node-pads empty">no sink</div>}
           {sinkBoundary.map((b) => (
