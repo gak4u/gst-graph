@@ -1,10 +1,40 @@
 import { memo, useMemo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { useStore } from '../state/store';
-import type { PipelineNodeData } from '@shared/types';
+import type { GstPadTemplate, PipelineNodeData } from '@shared/types';
 
 interface NodeDataRender extends PipelineNodeData {
   __detail?: never;
+}
+
+function isPlaceholder(name: string): boolean {
+  return /%/.test(name);
+}
+
+// Pads referenced by edges that touch this node but aren't in the static template list
+// (e.g. tee's `src_%u` template instantiated as `src_0`, `src_1`, `src_2`). Render a
+// handle for each one so xyflow can anchor the edge — otherwise the edge appears with
+// no terminator and looks like a missing connector.
+function buildEffectivePads(
+  templates: GstPadTemplate[],
+  direction: 'src' | 'sink',
+  referencedPads: Set<string>,
+): GstPadTemplate[] {
+  const fromTemplates = templates.filter((p) => p.direction === direction);
+  const known = new Set(fromTemplates.map((p) => p.name));
+  const extras: GstPadTemplate[] = [];
+  for (const name of referencedPads) {
+    if (known.has(name)) continue;
+    if (isPlaceholder(name)) continue;
+    extras.push({
+      name,
+      direction,
+      availability: 'request',
+      caps: [],
+      capsRaw: '',
+    });
+  }
+  return [...fromTemplates, ...extras];
 }
 
 export const ElementNode = memo(({ id, data, selected }: NodeProps) => {
@@ -21,9 +51,31 @@ export const ElementNode = memo(({ id, data, selected }: NodeProps) => {
     return set;
   });
 
+  const { referencedSrcPads, referencedSinkPads } = useStore((s) => {
+    const pl = s.pipelines.find((p) => p.id === s.activePipelineId);
+    const srcSet = new Set<string>();
+    const sinkSet = new Set<string>();
+    if (!pl) return { referencedSrcPads: srcSet, referencedSinkPads: sinkSet };
+    for (const e of pl.edges) {
+      if (e.source === id && e.sourceHandle?.startsWith('src:')) {
+        srcSet.add(e.sourceHandle.slice(4));
+      }
+      if (e.target === id && e.targetHandle?.startsWith('sink:')) {
+        sinkSet.add(e.targetHandle.slice(5));
+      }
+    }
+    return { referencedSrcPads: srcSet, referencedSinkPads: sinkSet };
+  });
+
   const padTemplates = detail?.padTemplates || [];
-  const sinks = padTemplates.filter((p) => p.direction === 'sink');
-  const srcs = padTemplates.filter((p) => p.direction === 'src');
+  const sinks = useMemo(
+    () => buildEffectivePads(padTemplates, 'sink', referencedSinkPads),
+    [padTemplates, referencedSinkPads],
+  );
+  const srcs = useMemo(
+    () => buildEffectivePads(padTemplates, 'src', referencedSrcPads),
+    [padTemplates, referencedSrcPads],
+  );
   const writableProps = useMemo(
     () => (detail?.properties || []).filter((p) => p.writable && p.name !== 'parent' && p.kind !== 'object'),
     [detail],
