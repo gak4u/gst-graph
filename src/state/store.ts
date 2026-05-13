@@ -1,5 +1,8 @@
 import { create } from 'zustand';
 import type {
+  GroupBoundaryPad,
+  GroupDef,
+  GroupParameter,
   GstElementSummary,
   GstElementDetail,
   PipelineDef,
@@ -70,11 +73,14 @@ interface State {
   updateVariableName: (nodeId: string, name: string) => void;
   updateVariableLabel: (nodeId: string, label: string) => void;
   toggleVariableHidden: (nodeId: string) => void;
-  updateVariableValue: (nodeId: string, value: string | number | boolean | null) => void;
+  updateVariableValue: (
+    nodeId: string,
+    value: string | number | boolean | string[] | number[] | boolean[] | null,
+  ) => void;
   updateVariableValueIn: (
     pipelineId: string,
     nodeId: string,
-    value: string | number | boolean | null,
+    value: string | number | boolean | string[] | number[] | boolean[] | null,
   ) => void;
   updateVariableKind: (nodeId: string, kind: VariableValueKind) => void;
   inferVariableForBinding: (variableId: string, elementNodeId: string, propertyName: string) => void;
@@ -88,6 +94,13 @@ interface State {
   setStatus: (status: RunStatus) => void;
   toast: (text: string, kind?: ToastMsg['kind']) => void;
   dismissToast: (id: number) => void;
+  // Loop groups
+  createGroup: (memberNodeIds: string[], position: { x: number; y: number }) => string | null;
+  ungroup: (groupId: string) => void;
+  renameGroup: (groupId: string, name: string) => void;
+  setGroupIterator: (groupId: string, variableNodeId: string) => void;
+  addGroupParameter: (groupId: string, param: GroupParameter) => void;
+  removeGroupParameter: (groupId: string, targetNodeId: string, propertyKey: string) => void;
 }
 
 function newPipelineDef(name: string): Pipeline {
@@ -670,7 +683,207 @@ export const useStore = create<State>((set, get) => ({
   },
 
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+
+  // ===== Loop groups =====
+  // A group is metadata: it points to existing member nodes by id and holds a parameter
+  // table + boundary handles. Members keep living in pipeline.nodes; only the container
+  // is added to nodes[] (rendered as a `gstGroup` xyflow node).
+  createGroup: (memberNodeIds, position) => {
+    const active = get().pipelines.find((p) => p.id === get().activePipelineId);
+    if (!active) return null;
+    const memberSet = new Set(memberNodeIds);
+    if (memberSet.size === 0) return null;
+    // Reject if any member is already in another group (no nested groups in v1)
+    const existingGroups = active.groups || [];
+    for (const g of existingGroups) {
+      for (const m of g.memberNodeIds) {
+        if (memberSet.has(m)) {
+          get().toast(`"${active.nodes.find((n) => n.id === m)?.data && (active.nodes.find((n) => n.id === m)!.data as PipelineNodeData).instanceName || m}" is already in a group`, 'err');
+          return null;
+        }
+      }
+    }
+    // Reject if member set isn't all gstElement nodes (v1 only groups element nodes)
+    for (const m of memberNodeIds) {
+      const node = active.nodes.find((n) => n.id === m);
+      if (!node || node.type !== 'gstElement') {
+        get().toast('Groups currently only accept element nodes', 'err');
+        return null;
+      }
+    }
+    const groupId = `g_${Math.random().toString(36).slice(2, 10)}`;
+    const boundary = computeGroupBoundary(active, memberSet);
+    const groupNode: PipelineGraphNode = {
+      id: groupId,
+      type: 'gstGroup',
+      position,
+      data: { groupId },
+    };
+    const newGroup: GroupDef = {
+      id: groupId,
+      name: 'Loop',
+      memberNodeIds,
+      iteratorVarId: '',
+      parameters: [],
+      boundary,
+    };
+    // Reroute any edges that cross the boundary to terminate at the group container.
+    // Internal edges stay on member nodes; we don't touch them.
+    get().updatePipeline(active.id, (p) => {
+      p.nodes = [...p.nodes, groupNode];
+      p.groups = [...existingGroups, newGroup];
+      p.edges = p.edges.map((e) => {
+        const srcInside = memberSet.has(e.source);
+        const tgtInside = memberSet.has(e.target);
+        if (srcInside && tgtInside) return e; // internal — keep as-is
+        if (!srcInside && !tgtInside) return e; // outside — keep as-is
+        if (tgtInside) {
+          // outside → member: redirect to group container
+          const b = boundary.find(
+            (bd) =>
+              bd.direction === 'sink' &&
+              bd.memberNodeId === e.target &&
+              `sink:${bd.memberPadName}` === e.targetHandle,
+          );
+          if (!b) return e;
+          return { ...e, target: groupId, targetHandle: b.handleId };
+        }
+        // srcInside, !tgtInside: member → outside
+        const b = boundary.find(
+          (bd) =>
+            bd.direction === 'src' &&
+            bd.memberNodeId === e.source &&
+            `src:${bd.memberPadName}` === e.sourceHandle,
+        );
+        if (!b) return e;
+        return { ...e, source: groupId, sourceHandle: b.handleId };
+      });
+    });
+    return groupId;
+  },
+
+  ungroup: (groupId) => {
+    const active = get().pipelines.find((p) => p.id === get().activePipelineId);
+    if (!active) return;
+    const group = (active.groups || []).find((g) => g.id === groupId);
+    if (!group) return;
+    get().updatePipeline(active.id, (p) => {
+      // Restore boundary edges back to member-node targets
+      p.edges = p.edges
+        .map((e) => {
+          if (e.source === groupId) {
+            const b = group.boundary.find(
+              (bd) => bd.direction === 'src' && bd.handleId === e.sourceHandle,
+            );
+            if (!b) return null;
+            return { ...e, source: b.memberNodeId, sourceHandle: `src:${b.memberPadName}` };
+          }
+          if (e.target === groupId) {
+            const b = group.boundary.find(
+              (bd) => bd.direction === 'sink' && bd.handleId === e.targetHandle,
+            );
+            if (!b) return null;
+            return { ...e, target: b.memberNodeId, targetHandle: `sink:${b.memberPadName}` };
+          }
+          return e;
+        })
+        .filter((e): e is NonNullable<typeof e> => e !== null);
+      // Drop the container node
+      p.nodes = p.nodes.filter((n) => n.id !== groupId);
+      p.groups = (p.groups || []).filter((g) => g.id !== groupId);
+    });
+  },
+
+  renameGroup: (groupId, name) => {
+    const active = get().pipelines.find((p) => p.id === get().activePipelineId);
+    if (!active) return;
+    get().updatePipeline(active.id, (p) => {
+      p.groups = (p.groups || []).map((g) => (g.id === groupId ? { ...g, name } : g));
+    });
+  },
+
+  setGroupIterator: (groupId, variableNodeId) => {
+    const active = get().pipelines.find((p) => p.id === get().activePipelineId);
+    if (!active) return;
+    get().updatePipeline(active.id, (p) => {
+      p.groups = (p.groups || []).map((g) =>
+        g.id === groupId ? { ...g, iteratorVarId: variableNodeId } : g,
+      );
+    });
+  },
+
+  addGroupParameter: (groupId, param) => {
+    const active = get().pipelines.find((p) => p.id === get().activePipelineId);
+    if (!active) return;
+    get().updatePipeline(active.id, (p) => {
+      p.groups = (p.groups || []).map((g) => {
+        if (g.id !== groupId) return g;
+        const exists = g.parameters.some(
+          (x) => x.targetNodeId === param.targetNodeId && x.propertyKey === param.propertyKey,
+        );
+        return exists ? g : { ...g, parameters: [...g.parameters, param] };
+      });
+    });
+  },
+
+  removeGroupParameter: (groupId, targetNodeId, propertyKey) => {
+    const active = get().pipelines.find((p) => p.id === get().activePipelineId);
+    if (!active) return;
+    get().updatePipeline(active.id, (p) => {
+      p.groups = (p.groups || []).map((g) =>
+        g.id !== groupId
+          ? g
+          : {
+              ...g,
+              parameters: g.parameters.filter(
+                (x) => !(x.targetNodeId === targetNodeId && x.propertyKey === propertyKey),
+              ),
+            },
+      );
+    });
+  },
 }));
+
+/** Walk a pipeline's edges and synthesize a stable list of boundary pads for a member set.
+ *  Each boundary pad keeps the inner pad name; we rename only the handle ID prefix to make
+ *  the container's handles distinct (`<dir>:<member>_<pad>`).
+ *  Re-run any time member edges change so cached boundary[] stays in sync. */
+function computeGroupBoundary(
+  pipeline: PipelineDef,
+  memberSet: Set<string>,
+): GroupBoundaryPad[] {
+  const boundary: GroupBoundaryPad[] = [];
+  const seenIds = new Set<string>();
+  for (const e of pipeline.edges) {
+    const srcInside = memberSet.has(e.source);
+    const tgtInside = memberSet.has(e.target);
+    if (srcInside === tgtInside) continue; // internal or external
+    if (tgtInside) {
+      const padName = e.targetHandle.startsWith('sink:') ? e.targetHandle.slice(5) : 'sink';
+      const handleId = `sink:${e.target}_${padName}`;
+      if (seenIds.has(handleId)) continue;
+      seenIds.add(handleId);
+      boundary.push({
+        handleId,
+        direction: 'sink',
+        memberNodeId: e.target,
+        memberPadName: padName,
+      });
+    } else {
+      const padName = e.sourceHandle.startsWith('src:') ? e.sourceHandle.slice(4) : 'src';
+      const handleId = `src:${e.source}_${padName}`;
+      if (seenIds.has(handleId)) continue;
+      seenIds.add(handleId);
+      boundary.push({
+        handleId,
+        direction: 'src',
+        memberNodeId: e.source,
+        memberPadName: padName,
+      });
+    }
+  }
+  return boundary;
+}
 
 function stripForPersist(p: Pipeline): PipelineDef {
   return {
@@ -678,6 +891,7 @@ function stripForPersist(p: Pipeline): PipelineDef {
     name: p.name,
     nodes: p.nodes,
     edges: p.edges,
+    groups: p.groups,
   };
 }
 

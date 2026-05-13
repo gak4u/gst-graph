@@ -19,12 +19,14 @@ import { useStore } from '../state/store';
 import { ElementNode } from './ElementNode';
 import { VariableNode } from './VariableNode';
 import { TransformNode } from './TransformNode';
+import { GroupNode } from './GroupNode';
 import { capsCompatible } from '../lib/caps';
 
 const nodeTypes = {
   gstElement: ElementNode,
   gstVariable: VariableNode,
   gstTransform: TransformNode,
+  gstGroup: GroupNode,
 };
 
 function GraphInner() {
@@ -54,12 +56,29 @@ function GraphInner() {
     });
   }, [pipeline, details, ensureDetail]);
 
+  const ungroup = useStore((s) => s.ungroup);
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => {
       if (!pipeline) return;
-      updatePipeline(pipeline.id, (p) => {
-        p.nodes = applyNodeChanges(changes, p.nodes as unknown as Node[]) as unknown as typeof p.nodes;
-      });
+      // Intercept removals of group containers and route them through `ungroup` so the
+      // member nodes are surfaced back to the canvas (and their edges restored) rather
+      // than orphaned inside pipeline.nodes with no rendering path.
+      const remainingChanges: NodeChange[] = [];
+      for (const c of changes) {
+        if (c.type === 'remove') {
+          const node = pipeline.nodes.find((n) => n.id === c.id);
+          if (node?.type === 'gstGroup') {
+            ungroup(c.id);
+            continue;
+          }
+        }
+        remainingChanges.push(c);
+      }
+      if (remainingChanges.length > 0) {
+        updatePipeline(pipeline.id, (p) => {
+          p.nodes = applyNodeChanges(remainingChanges, p.nodes as unknown as Node[]) as unknown as typeof p.nodes;
+        });
+      }
       for (const c of changes) {
         if (c.type === 'select' && c.selected) {
           selectNode(c.id);
@@ -69,7 +88,7 @@ function GraphInner() {
         }
       }
     },
-    [pipeline, updatePipeline, selectNode],
+    [pipeline, updatePipeline, selectNode, ungroup],
   );
 
   const onEdgesChange = useCallback(
@@ -98,16 +117,51 @@ function GraphInner() {
       if (isValueOut && isPropTarget && tgtNode.type === 'gstElement') return true;
       if (isValueOut && isInputTarget && tgtNode.type === 'gstTransform') return true;
       if (isValueOut || isPropTarget || isInputTarget) return false;
-      if (srcNode.type !== 'gstElement' || tgtNode.type !== 'gstElement') return false;
+      // Group containers are allowed on either side. Caps compat is checked against
+      // the inner member node's pad (via the boundary mapping) so two groups talking
+      // to each other still validates correctly.
+      const isElementOrGroup = (t: typeof srcNode.type) => t === 'gstElement' || t === 'gstGroup';
+      if (!isElementOrGroup(srcNode.type) || !isElementOrGroup(tgtNode.type)) return false;
 
-      const srcDetail = details[srcNode.data.elementName];
-      const tgtDetail = details[tgtNode.data.elementName];
+      const resolveElementPad = (
+        node: typeof srcNode,
+        handle: string,
+        direction: 'src' | 'sink',
+      ): { elementName: string; padName: string } | null => {
+        const padPrefix = direction === 'src' ? 'src:' : 'sink:';
+        if (node.type === 'gstElement') {
+          return {
+            elementName: node.data.elementName,
+            padName: handle.startsWith(padPrefix) ? handle.slice(padPrefix.length) : '',
+          };
+        }
+        if (node.type === 'gstGroup') {
+          const group = pipeline?.groups?.find((g) => g.id === node.data.groupId);
+          if (!group) return null;
+          const boundary = group.boundary.find(
+            (b) => b.handleId === handle && b.direction === direction,
+          );
+          if (!boundary) return null;
+          const member = pipeline?.nodes.find((n) => n.id === boundary.memberNodeId);
+          if (!member || member.type !== 'gstElement') return null;
+          return { elementName: member.data.elementName, padName: boundary.memberPadName };
+        }
+        return null;
+      };
+
+      const srcResolved = resolveElementPad(srcNode, conn.sourceHandle, 'src');
+      const tgtResolved = resolveElementPad(tgtNode, conn.targetHandle, 'sink');
+      if (!srcResolved || !tgtResolved) return true; // can't resolve — be permissive
+      const srcDetail = details[srcResolved.elementName];
+      const tgtDetail = details[tgtResolved.elementName];
       if (!srcDetail || !tgtDetail) return true;
-      const srcPadName = conn.sourceHandle.replace(/^src:/, '');
-      const tgtPadName = conn.targetHandle.replace(/^sink:/, '');
-      const srcPad = srcDetail.padTemplates.find((p) => p.direction === 'src' && p.name === srcPadName);
-      const tgtPad = tgtDetail.padTemplates.find((p) => p.direction === 'sink' && p.name === tgtPadName);
-      if (!srcPad || !tgtPad) return false;
+      const srcPad = srcDetail.padTemplates.find(
+        (p) => p.direction === 'src' && p.name === srcResolved.padName,
+      );
+      const tgtPad = tgtDetail.padTemplates.find(
+        (p) => p.direction === 'sink' && p.name === tgtResolved.padName,
+      );
+      if (!srcPad || !tgtPad) return true; // unknown pad name — allow (template-style)
       return capsCompatible(srcPad, tgtPad);
     },
     [pipeline, details],
@@ -189,7 +243,16 @@ function GraphInner() {
     [elements, addNodeFromElement, rf],
   );
 
-  const nodes = useMemo<Node[]>(() => (pipeline?.nodes as unknown as Node[]) || [], [pipeline]);
+  const nodes = useMemo<Node[]>(() => {
+    if (!pipeline) return [];
+    // Collapsed-only group rendering: hide every member node, the container stands in
+    // for the whole prototype on the canvas. Inspector lets the user edit members.
+    const memberIds = new Set<string>();
+    for (const g of pipeline.groups || []) {
+      for (const m of g.memberNodeIds) memberIds.add(m);
+    }
+    return pipeline.nodes.filter((n) => !memberIds.has(n.id)) as unknown as Node[];
+  }, [pipeline]);
   const edges = useMemo<Edge[]>(() => (pipeline?.edges as unknown as Edge[]) || [], [pipeline]);
 
   if (!pipeline) return <div className="empty-state">No pipeline selected.</div>;

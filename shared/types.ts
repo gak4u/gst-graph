@@ -124,6 +124,14 @@ export interface PipelineEdgeData {
   capsFilter?: string;
 }
 
+/** Display-only data on a group container node. The authoritative state lives in the
+ *  parent PipelineDef.groups[] entry — this just carries the groupId so the renderer can
+ *  look it up. */
+export interface GroupNodeData {
+  groupId: string;
+  [k: string]: unknown;
+}
+
 export type PipelineGraphNode =
   | {
       id: string;
@@ -142,6 +150,12 @@ export type PipelineGraphNode =
       type: 'gstTransform';
       position: { x: number; y: number };
       data: TransformNodeData;
+    }
+  | {
+      id: string;
+      type: 'gstGroup';
+      position: { x: number; y: number };
+      data: GroupNodeData;
     };
 
 /** A property on a member node whose value varies per iteration of a loop group.

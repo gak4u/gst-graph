@@ -8,8 +8,29 @@ export function Toolbar() {
   const elements = useStore((s) => s.elements);
   const addVariableNode = useStore((s) => s.addVariableNode);
   const addTransformNode = useStore((s) => s.addTransformNode);
+  const createGroup = useStore((s) => s.createGroup);
   const setView = useStore((s) => s.setView);
   const [cmdPreview, setCmdPreview] = useState<string | null>(null);
+
+  const selectedElementIds = (pipeline?.nodes || [])
+    .filter(
+      (n) =>
+        n.type === 'gstElement' &&
+        (n as unknown as { selected?: boolean }).selected === true,
+    )
+    .map((n) => n.id);
+  const canGroup = selectedElementIds.length >= 2;
+
+  function groupSelection(): void {
+    if (!pipeline) return;
+    // Pick a placement near the first selected node so the new container appears in-context
+    const firstNode = pipeline.nodes.find((n) => n.id === selectedElementIds[0]);
+    const position = firstNode
+      ? { x: firstNode.position.x + 40, y: firstNode.position.y + 40 }
+      : { x: 100, y: 100 };
+    const groupId = createGroup(selectedElementIds, position);
+    if (groupId) toast('Group created — bind a list variable as iterator next', 'info');
+  }
 
   async function run() {
     if (!pipeline) return;
@@ -110,6 +131,17 @@ export function Toolbar() {
           title="Add a math node"
         >
           + Math
+        </button>
+        <button
+          onClick={groupSelection}
+          disabled={!canGroup}
+          title={
+            canGroup
+              ? `Wrap ${selectedElementIds.length} selected elements in a loopable group`
+              : 'Select 2+ element nodes to enable grouping'
+          }
+        >
+          ⤓ Group selected
         </button>
         <button onClick={exportJson} disabled={!pipeline} title="Export pipeline to a JSON file">
           ↓ Export

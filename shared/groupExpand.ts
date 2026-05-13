@@ -72,10 +72,10 @@ function cloneMember(
   const freshId = `${node.id}__i${i}`;
   idMap.set(node.id, freshId);
   if (node.type === 'gstElement') {
-    const d = node.data as PipelineNodeData;
-    return {
-      ...node,
+    const d = node.data;
+    const cloned: PipelineGraphNode = {
       id: freshId,
+      type: 'gstElement',
       position: { ...node.position },
       data: {
         ...d,
@@ -83,22 +83,36 @@ function cloneMember(
         properties: { ...(d.properties || {}) },
       },
     };
+    return cloned;
   }
   if (node.type === 'gstVariable') {
-    return {
-      ...node,
+    const d = node.data;
+    const cloned: PipelineGraphNode = {
       id: freshId,
+      type: 'gstVariable',
       position: { ...node.position },
-      data: { ...node.data, value: (node.data as VariableNodeData).value } as VariableNodeData,
+      data: { ...d },
     };
+    return cloned;
   }
-  // gstTransform
-  return {
-    ...node,
+  if (node.type === 'gstTransform') {
+    const d = node.data;
+    const cloned: PipelineGraphNode = {
+      id: freshId,
+      type: 'gstTransform',
+      position: { ...node.position },
+      data: { ...d, inputs: [...d.inputs] },
+    };
+    return cloned;
+  }
+  // gstGroup — shouldn't end up as a member of another group in v1, but handle gracefully
+  const cloned: PipelineGraphNode = {
     id: freshId,
+    type: 'gstGroup',
     position: { ...node.position },
-    data: { ...node.data, inputs: [...node.data.inputs] },
+    data: { ...node.data },
   };
+  return cloned;
 }
 
 /** Convert a primitive list element to the property-value shape PipelineNodeData expects. */

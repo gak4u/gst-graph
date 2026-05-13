@@ -77,6 +77,16 @@ range declared by the package.
     `Math.*` available (`a * 1000`, `Math.min(a, b)`, ...).
   - Live `=` preview shows the resolved value as you type. Transforms
     can feed into other transforms, with cycle detection.
+- **Loopable groups.** Select two or more element nodes, click
+  **⤓ Group selected**, and they collapse into one container that
+  represents the prototype branch. Bind a list-typed variable as the
+  group's iterator and pick which member properties vary per iteration
+  (e.g. `rtmp2sink.location` becomes a 3-element list). At runtime the
+  builder unrolls the group into N copies with fresh instance names —
+  one canvas branch fans out to N gst-launch branches, with upstream
+  tees auto-allocating fresh request pads per copy. The container shows
+  a `× N` badge matching the iterator length and surfaces an error if
+  the iterator is missing, scalar, or empty.
 - **Persistence under `~/.gst-graph/`.**
   - `pipelines.json` — every change is autosaved (atomic temp+rename
     write with a `.bak` rotation kept around for one-revision

@@ -70,6 +70,11 @@ function sanitizePipeline(def: PipelineDef): { def: PipelineDef; warnings: strin
       }
       validNodes.push(n);
       validIds.add(n.id);
+    } else if (n.type === 'gstGroup') {
+      // Group containers are kept through sanitize so expandGroups can resolve them.
+      // The pre-pass drops them before walkTokens runs.
+      validNodes.push(n);
+      validIds.add(n.id);
     } else {
       const bad = n as { id?: string; type?: unknown };
       warnings.push(`Skipped node ${String(bad.id)} with unrecognized type ${String(bad.type)}`);

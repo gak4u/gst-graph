@@ -274,6 +274,23 @@ export function PropertiesPanel() {
                     .updateVariableValue(node.id, e.target.value === '' ? null : Number(e.target.value))
                 }
               />
+            ) : vd.valueKind === 'list' ? (
+              <textarea
+                rows={4}
+                placeholder={'One value per line, e.g.\nrtmp://a/1\nrtmp://b/2\nrtmp://c/3'}
+                value={
+                  Array.isArray(vd.value)
+                    ? (vd.value as Array<string | number | boolean>).map(String).join('\n')
+                    : ''
+                }
+                onChange={(e) => {
+                  const lines = e.target.value
+                    .split('\n')
+                    .map((l) => l.trim())
+                    .filter((l) => l.length > 0);
+                  useStore.getState().updateVariableValue(node.id, lines);
+                }}
+              />
             ) : (
               <input
                 value={vd.value == null ? '' : String(vd.value)}
@@ -297,6 +314,7 @@ export function PropertiesPanel() {
               <option value="string">string</option>
               <option value="number">number</option>
               <option value="boolean">boolean</option>
+              <option value="list">list (group iterator)</option>
             </select>
           </div>
           <div className="prop-row">
@@ -314,6 +332,151 @@ export function PropertiesPanel() {
                 {vd.hidden ? 'Hidden (internal constant)' : 'Shown on home screen'}
               </span>
             </label>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (node.type === 'gstGroup') {
+    const group = pipeline?.groups?.find((g) => g.id === node.id);
+    if (!group) {
+      return (
+        <div className="props">
+          <div className="props-empty">Group container has no definition.</div>
+        </div>
+      );
+    }
+    const listVars = (pipeline?.nodes || []).filter(
+      (n): n is Extract<typeof n, { type: 'gstVariable' }> =>
+        n.type === 'gstVariable' &&
+        (n.data as VariableNodeData).valueKind === 'list',
+    );
+    const memberNodes = group.memberNodeIds
+      .map((mid) => pipeline?.nodes.find((n) => n.id === mid))
+      .filter(
+        (n): n is Extract<NonNullable<typeof n>, { type: 'gstElement' }> =>
+          !!n && n.type === 'gstElement',
+      );
+    const iteratorVar = listVars.find((v) => v.id === group.iteratorVarId);
+    const iteratorLen =
+      iteratorVar && Array.isArray((iteratorVar.data as VariableNodeData).value)
+        ? ((iteratorVar.data as VariableNodeData).value as unknown[]).length
+        : 0;
+
+    return (
+      <div className="props">
+        <div className="props-head">
+          <div className="row1">
+            <div className="icon" style={{ color: '#ffd789' }}>×</div>
+            <div className="title-block">
+              <h3>
+                Group
+                <span className="elem-id">{group.name}</span>
+              </h3>
+              <div className="sub">
+                {memberNodes.length} member{memberNodes.length === 1 ? '' : 's'} · × {iteratorLen}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="props-body" style={{ padding: 12 }}>
+          <div className="prop-row">
+            <div className="prop-head">
+              <span className="prop-name">name</span>
+              <span className="prop-type">String</span>
+            </div>
+            <input
+              value={group.name}
+              onChange={(e) => useStore.getState().renameGroup(group.id, e.target.value)}
+            />
+          </div>
+          <div className="prop-row">
+            <div className="prop-head">
+              <span className="prop-name">iterator variable</span>
+              <span className="prop-type">list</span>
+            </div>
+            <select
+              value={group.iteratorVarId}
+              onChange={(e) =>
+                useStore.getState().setGroupIterator(group.id, e.target.value)
+              }
+            >
+              <option value="">(none — group won't run)</option>
+              {listVars.map((v) => {
+                const vd = v.data as VariableNodeData;
+                const len = Array.isArray(vd.value) ? (vd.value as unknown[]).length : 0;
+                return (
+                  <option key={v.id} value={v.id}>
+                    ${vd.varName} ({len} item{len === 1 ? '' : 's'})
+                  </option>
+                );
+              })}
+            </select>
+            {listVars.length === 0 && (
+              <div className="muted" style={{ marginTop: 4 }}>
+                No list variables in this pipeline yet. Add a Variable node and set its kind
+                to "list" to feed this group.
+              </div>
+            )}
+          </div>
+          <div className="prop-row">
+            <div className="prop-head">
+              <span className="prop-name">parameters</span>
+              <span className="prop-type">per-iteration property</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {group.parameters.length === 0 && (
+                <div className="muted">
+                  No parameters yet. Each parameter binds one member node's property
+                  (e.g. <code>rtmp2sink.location</code>) to the iterator's per-iteration value.
+                </div>
+              )}
+              {group.parameters.map((p) => {
+                const member = memberNodes.find((m) => m.id === p.targetNodeId);
+                return (
+                  <div
+                    key={`${p.targetNodeId}:${p.propertyKey}`}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                  >
+                    <code style={{ flex: 1 }}>
+                      {member ? member.data.instanceName : '???'}.{p.propertyKey}
+                    </code>
+                    <button
+                      className="ghost"
+                      onClick={() =>
+                        useStore.getState().removeGroupParameter(
+                          group.id,
+                          p.targetNodeId,
+                          p.propertyKey,
+                        )
+                      }
+                    >
+                      ✕
+                    </button>
+                  </div>
+                );
+              })}
+              <GroupParameterAdder
+                groupId={group.id}
+                memberNodes={memberNodes}
+                existing={group.parameters}
+              />
+            </div>
+          </div>
+          <div className="prop-row">
+            <div className="prop-head">
+              <span className="prop-name">members</span>
+              <span className="prop-type">{memberNodes.length} elements</span>
+            </div>
+            <div className="muted">
+              {memberNodes.map((m) => m.data.instanceName).join(' → ') || 'none'}
+            </div>
+          </div>
+          <div className="prop-row">
+            <button onClick={() => useStore.getState().ungroup(group.id)}>
+              Ungroup (restore members to canvas)
+            </button>
           </div>
         </div>
       </div>
@@ -497,6 +660,72 @@ export function PropertiesPanel() {
           })}
         </Section>
       </div>
+    </div>
+  );
+}
+
+interface GroupParameterAdderProps {
+  groupId: string;
+  memberNodes: Array<Extract<import('@shared/types').PipelineGraphNode, { type: 'gstElement' }>>;
+  existing: Array<{ targetNodeId: string; propertyKey: string }>;
+}
+
+function GroupParameterAdder({ groupId, memberNodes, existing }: GroupParameterAdderProps) {
+  const details = useStore((s) => s.details);
+  const addGroupParameter = useStore((s) => s.addGroupParameter);
+  const [memberId, setMemberId] = useState('');
+  const [propKey, setPropKey] = useState('');
+
+  const memberDetail = memberNodes.find((m) => m.id === memberId);
+  const detail = memberDetail ? details[memberDetail.data.elementName] : null;
+  const candidateProps = (detail?.properties || []).filter(
+    (p) =>
+      p.writable &&
+      p.name !== 'name' &&
+      p.name !== 'parent' &&
+      p.kind !== 'object' &&
+      !existing.some((x) => x.targetNodeId === memberId && x.propertyKey === p.name),
+  );
+
+  function add() {
+    if (!memberId || !propKey) return;
+    addGroupParameter(groupId, { targetNodeId: memberId, propertyKey: propKey });
+    setPropKey('');
+  }
+
+  return (
+    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+      <select
+        value={memberId}
+        onChange={(e) => {
+          setMemberId(e.target.value);
+          setPropKey('');
+        }}
+        style={{ flex: 1 }}
+      >
+        <option value="">- pick member -</option>
+        {memberNodes.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.data.instanceName}
+          </option>
+        ))}
+      </select>
+      <select
+        value={propKey}
+        onChange={(e) => setPropKey(e.target.value)}
+        disabled={!memberId}
+        style={{ flex: 1 }}
+      >
+        <option value="">- property -</option>
+        {candidateProps.map((p) => (
+          <option key={p.name} value={p.name}>
+            {p.name}
+          </option>
+        ))}
+      </select>
+      <button disabled={!memberId || !propKey} onClick={add}>
+        + add
+      </button>
     </div>
   );
 }
