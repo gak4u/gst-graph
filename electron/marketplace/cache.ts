@@ -7,12 +7,18 @@ const CACHE_FILE = path.join(os.homedir(), '.gst-graph', 'marketplace-cache.json
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 interface CacheShape {
-  schemaVersion: 1;
+  schemaVersion: 2;
   search: Record<string, MarketplaceSearchResult>;
 }
 
+// Bump this when MarketplacePackageCard / MarketplaceSearchResult shape changes
+// in a way that older cached entries can't be safely served from. (e.g. v2 added
+// `packagePath`; pre-v2 cards had no path so the GitHub deep-link fell back to
+// the repo root, masking the change.)
+const SCHEMA_VERSION = 2 as const;
+
 function emptyCache(): CacheShape {
-  return { schemaVersion: 1, search: {} };
+  return { schemaVersion: SCHEMA_VERSION, search: {} };
 }
 
 let cache: CacheShape | null = null;
@@ -22,7 +28,7 @@ function load(): CacheShape {
   try {
     const buf = fs.readFileSync(CACHE_FILE, 'utf8');
     const parsed = JSON.parse(buf) as CacheShape;
-    if (parsed && parsed.schemaVersion === 1) {
+    if (parsed && parsed.schemaVersion === SCHEMA_VERSION) {
       cache = parsed;
       return cache;
     }
