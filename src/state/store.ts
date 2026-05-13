@@ -50,6 +50,9 @@ interface State {
   loadError: string | null;
   dataDir: string;
   toasts: ToastMsg[];
+  history: Record<string, { past: PipelineDef[]; future: PipelineDef[] }>;
+  undo: () => boolean;
+  redo: () => boolean;
   setView: (v: AppView) => void;
   hydrate: () => Promise<void>;
   reloadFromDisk: () => Promise<void>;
@@ -140,6 +143,54 @@ function newPipelineDef(name: string): Pipeline {
 
 let toastSeq = 0;
 
+/** Max snapshots retained per pipeline. */
+const MAX_HISTORY = 50;
+
+/** Return a normalized JSON signature of the pipeline that ignores transient state:
+ *  node positions, selection flags, runtime status, and log buffers. Two pipelines
+ *  that produce the same signature are considered identical for undo purposes. */
+function historySignature(p: Pipeline): string {
+  return JSON.stringify({
+    id: p.id,
+    name: p.name,
+    nodes: p.nodes.map((n) => {
+      const copy: PipelineGraphNode & { selected?: boolean } = { ...n };
+      copy.position = { x: 0, y: 0 };
+      delete (copy as { selected?: boolean }).selected;
+      return copy;
+    }),
+    edges: p.edges.map((e) => {
+      const copy = { ...e } as typeof e & { selected?: boolean };
+      delete copy.selected;
+      return copy;
+    }),
+    groups: p.groups,
+  });
+}
+
+/** Strip the live Pipeline down to a persistable PipelineDef snapshot for history. */
+function snapshotForHistory(p: Pipeline): PipelineDef {
+  return {
+    id: p.id,
+    name: p.name,
+    nodes: p.nodes.map((n) => ({ ...n, position: { ...n.position } })),
+    edges: p.edges.map((e) => ({ ...e })),
+    groups: p.groups ? p.groups.map((g) => ({ ...g })) : undefined,
+  };
+}
+
+/** Replace the structural slice of a Pipeline with a snapshot while preserving live
+ *  runtime state (running/pid/exitCode/logs). */
+function mergeSnapshotInto(live: Pipeline, snap: PipelineDef): Pipeline {
+  return {
+    ...live,
+    name: snap.name,
+    nodes: snap.nodes,
+    edges: snap.edges,
+    groups: snap.groups,
+  };
+}
+
 export const useStore = create<State>((set, get) => ({
   elements: [],
   details: {},
@@ -154,8 +205,52 @@ export const useStore = create<State>((set, get) => ({
   loadError: null,
   dataDir: '',
   toasts: [],
+  history: {},
 
   setView: (v) => set({ view: v }),
+
+  // Undo/redo restore the previous PipelineDef snapshot for the active pipeline.
+  // Position/selection drift is excluded from history signatures so dragging a node
+  // around the canvas doesn't burn ring-buffer slots; only meaningful structural and
+  // value changes (node add/remove, edge changes, property edits, group ops,
+  // iterator schema/rows) push entries.
+  undo: () => {
+    const id = get().activePipelineId;
+    if (!id) return false;
+    const h = get().history[id];
+    if (!h || h.past.length === 0) return false;
+    const last = h.past[h.past.length - 1];
+    const past = h.past.slice(0, -1);
+    const current = get().pipelines.find((p) => p.id === id);
+    if (!current) return false;
+    const future = [...h.future, snapshotForHistory(current)].slice(-MAX_HISTORY);
+    set((s) => ({
+      pipelines: s.pipelines.map((p) =>
+        p.id === id ? mergeSnapshotInto(p, last) : p,
+      ),
+      history: { ...s.history, [id]: { past, future } },
+    }));
+    return true;
+  },
+
+  redo: () => {
+    const id = get().activePipelineId;
+    if (!id) return false;
+    const h = get().history[id];
+    if (!h || h.future.length === 0) return false;
+    const next = h.future[h.future.length - 1];
+    const future = h.future.slice(0, -1);
+    const current = get().pipelines.find((p) => p.id === id);
+    if (!current) return false;
+    const past = [...h.past, snapshotForHistory(current)].slice(-MAX_HISTORY);
+    set((s) => ({
+      pipelines: s.pipelines.map((p) =>
+        p.id === id ? mergeSnapshotInto(p, next) : p,
+      ),
+      history: { ...s.history, [id]: { past, future } },
+    }));
+    return true;
+  },
 
   hydrate: async () => {
     if (get().hydrated) return;
@@ -322,14 +417,30 @@ export const useStore = create<State>((set, get) => ({
     })),
 
   updatePipeline: (id, mut) =>
-    set((s) => ({
-      pipelines: s.pipelines.map((p) => {
+    set((s) => {
+      const prev = s.pipelines.find((p) => p.id === id);
+      if (!prev) return s;
+      const prevSig = historySignature(prev);
+      const nextPipelines = s.pipelines.map((p) => {
         if (p.id !== id) return p;
         const copy = { ...p, nodes: [...p.nodes], edges: [...p.edges] };
         mut(copy);
         return copy;
-      }),
-    })),
+      });
+      const next = nextPipelines.find((p) => p.id === id);
+      if (!next) return { pipelines: nextPipelines };
+      const nextSig = historySignature(next);
+      if (prevSig === nextSig) {
+        // Position-only / selection-only / runtime status change — don't burn history.
+        return { pipelines: nextPipelines };
+      }
+      const h = s.history[id] || { past: [], future: [] };
+      const past = [...h.past, snapshotForHistory(prev)].slice(-MAX_HISTORY);
+      return {
+        pipelines: nextPipelines,
+        history: { ...s.history, [id]: { past, future: [] } },
+      };
+    }),
 
   selectNode: (id) => set({ selectedNodeId: id }),
 

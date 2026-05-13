@@ -10,6 +10,13 @@ export function Toolbar() {
   const addTransformNode = useStore((s) => s.addTransformNode);
   const createGroup = useStore((s) => s.createGroup);
   const setView = useStore((s) => s.setView);
+  const undo = useStore((s) => s.undo);
+  const redo = useStore((s) => s.redo);
+  const historyDepth = useStore((s) =>
+    s.activePipelineId ? (s.history[s.activePipelineId] || { past: [], future: [] }) : { past: [], future: [] },
+  );
+  const canUndo = historyDepth.past.length > 0;
+  const canRedo = historyDepth.future.length > 0;
   const [cmdPreview, setCmdPreview] = useState<string | null>(null);
 
   // Any selected element / variable / transform node is eligible. Group containers
@@ -99,6 +106,26 @@ export function Toolbar() {
           ← Home
         </button>
         <span className="title">{pipeline?.name || 'GStreamer Graph Editor'}</span>
+        <button
+          onClick={() => {
+            const did = undo();
+            if (!did) toast('Nothing to undo', 'info');
+          }}
+          disabled={!canUndo}
+          title={canUndo ? `Undo last change (⌘Z) — ${historyDepth.past.length} step(s)` : 'Nothing to undo'}
+        >
+          ↶ Undo
+        </button>
+        <button
+          onClick={() => {
+            const did = redo();
+            if (!did) toast('Nothing to redo', 'info');
+          }}
+          disabled={!canRedo}
+          title={canRedo ? `Redo (⇧⌘Z) — ${historyDepth.future.length} step(s)` : 'Nothing to redo'}
+        >
+          ↷ Redo
+        </button>
         <button
           className="primary"
           onClick={run}

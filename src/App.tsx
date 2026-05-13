@@ -47,6 +47,24 @@ export function App() {
     };
   }, [setupPhase, appendLog, setStatus, hydrate, reloadFromDisk]);
 
+  // Global Cmd/Ctrl+Z (and Shift for redo). Ignore when focus is in a text input
+  // so we don't intercept the browser's native input-level undo.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const meta = e.metaKey || e.ctrlKey;
+      if (!meta || e.key.toLowerCase() !== 'z') return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
+      e.preventDefault();
+      const s = useStore.getState();
+      const did = e.shiftKey ? s.redo() : s.undo();
+      if (!did) s.toast(e.shiftKey ? 'Nothing to redo' : 'Nothing to undo', 'info');
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   if (setupPhase === 'checking') {
     return <div className="setup-checking">Checking GStreamer installation…</div>;
   }
