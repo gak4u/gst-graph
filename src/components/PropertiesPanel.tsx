@@ -298,7 +298,7 @@ export function PropertiesPanel() {
                   useStore.getState().updateVariableValue(node.id, lines);
                 }}
               />
-            ) : vd.valueKind === 'record-list' ? (
+            ) : vd.valueKind === 'record-list' || vd.valueKind === 'kv' ? (
               <IteratorEditorButton variableNodeId={node.id} data={vd} />
             ) : (
               <input
@@ -325,6 +325,7 @@ export function PropertiesPanel() {
               <option value="boolean">boolean</option>
               <option value="list">list (single-column iterator)</option>
               <option value="record-list">record list (multi-column iterator)</option>
+              <option value="kv">kv (key-value lookup)</option>
             </select>
           </div>
           <div className="prop-row">
@@ -459,29 +460,55 @@ export function PropertiesPanel() {
                 return (
                   <div
                     key={`${p.targetNodeId}:${p.propertyKey}`}
-                    style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                    style={{ display: 'flex', flexDirection: 'column', gap: 4 }}
                   >
-                    <code style={{ flex: 1 }}>
-                      {member ? member.data.instanceName : '???'}.{p.propertyKey}
-                      {col && (
-                        <span className="muted">
-                          {' '}
-                          ← <code>${col}</code>
-                        </span>
-                      )}
-                    </code>
-                    <button
-                      className="ghost"
-                      onClick={() =>
-                        useStore.getState().removeGroupParameter(
-                          group.id,
-                          p.targetNodeId,
-                          p.propertyKey,
-                        )
-                      }
-                    >
-                      ✕
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <code style={{ flex: 1 }}>
+                        {member ? member.data.instanceName : '???'}.{p.propertyKey}
+                        {!p.template && col && (
+                          <span className="muted">
+                            {' '}
+                            ← <code>${col}</code>
+                          </span>
+                        )}
+                        {p.template && (
+                          <span className="muted">
+                            {' '}
+                            ← <code>{p.template}</code>
+                          </span>
+                        )}
+                      </code>
+                      <button
+                        className="ghost"
+                        onClick={() =>
+                          useStore.getState().removeGroupParameter(
+                            group.id,
+                            p.targetNodeId,
+                            p.propertyKey,
+                          )
+                        }
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span className="muted" style={{ fontSize: 10, width: 64 }}>
+                        template
+                      </span>
+                      <input
+                        placeholder="optional — e.g. ${endpoint}${key}"
+                        value={p.template ?? ''}
+                        onChange={(e) =>
+                          useStore.getState().setGroupParameterTemplate(
+                            group.id,
+                            p.targetNodeId,
+                            p.propertyKey,
+                            e.target.value || undefined,
+                          )
+                        }
+                        style={{ flex: 1, fontFamily: 'monospace', fontSize: 11 }}
+                      />
+                    </div>
                   </div>
                 );
               })}
@@ -701,6 +728,11 @@ interface IteratorEditorButtonProps {
 function IteratorEditorButton({ variableNodeId, data }: IteratorEditorButtonProps) {
   const [open, setOpen] = useState(false);
   const activeId = useStore((s) => s.activePipelineId);
+  const isKv = data.valueKind === 'kv';
+  const kvMap =
+    isKv && data.value && typeof data.value === 'object' && !Array.isArray(data.value)
+      ? (data.value as Record<string, string>)
+      : null;
   const schema = data.schema || [];
   const rows = Array.isArray(data.value) ? (data.value as IteratorRow[]) : [];
 
@@ -708,7 +740,12 @@ function IteratorEditorButton({ variableNodeId, data }: IteratorEditorButtonProp
     <>
       <div className="iter-summary-row">
         <div className="iter-summary-meta">
-          {schema.length === 0 ? (
+          {isKv ? (
+            <span>
+              {kvMap ? Object.keys(kvMap).length : 0} entr
+              {kvMap && Object.keys(kvMap).length === 1 ? 'y' : 'ies'}
+            </span>
+          ) : schema.length === 0 ? (
             <span className="muted">No columns yet</span>
           ) : (
             <>
@@ -731,7 +768,7 @@ function IteratorEditorButton({ variableNodeId, data }: IteratorEditorButtonProp
           )}
         </div>
         <button className="primary" onClick={() => setOpen(true)}>
-          Edit rows…
+          {isKv ? 'Edit entries…' : 'Edit rows…'}
         </button>
       </div>
       {open && activeId && (

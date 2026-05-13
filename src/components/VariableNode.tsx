@@ -15,7 +15,8 @@ export const VariableNode = memo(({ id, data, selected }: NodeProps) => {
 
   const isList = d.valueKind === 'list';
   const isRecord = d.valueKind === 'record-list';
-  const isIterator = isList || isRecord;
+  const isKv = d.valueKind === 'kv';
+  const isIterator = isList || isRecord || isKv;
 
   return (
     <div className={`var-node ${selected ? 'selected' : ''} ${d.hidden ? 'hidden' : ''}`}>
@@ -51,7 +52,7 @@ export const VariableNode = memo(({ id, data, selected }: NodeProps) => {
         <div className="var-node-kind-row">
           <span className="var-node-kind-label">type</span>
           <div className="var-node-kind-pills">
-            {(['string', 'number', 'boolean', 'list', 'record-list'] as const).map((k) => (
+            {(['string', 'number', 'boolean', 'list', 'record-list', 'kv'] as const).map((k) => (
               <button
                 key={k}
                 className={`var-node-kind-pill ${d.valueKind === k ? 'active' : ''}`}
@@ -70,7 +71,9 @@ export const VariableNode = memo(({ id, data, selected }: NodeProps) => {
                       ? 'bool'
                       : k === 'list'
                         ? 'list'
-                        : 'rows'}
+                        : k === 'record-list'
+                          ? 'rows'
+                          : 'kv'}
               </button>
             ))}
           </div>
@@ -120,6 +123,25 @@ export const VariableNode = memo(({ id, data, selected }: NodeProps) => {
               {(d.schema || []).length} col{(d.schema || []).length === 1 ? '' : 's'} ·{' '}
               {Array.isArray(d.value) ? (d.value as IteratorRow[]).length : 0} row
               {Array.isArray(d.value) && (d.value as IteratorRow[]).length === 1 ? '' : 's'}
+            </span>
+            <button
+              className="var-configure-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                setModalOpen(true);
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              Configure…
+            </button>
+          </div>
+        ) : isKv ? (
+          <div className="var-iter-summary">
+            <span className="muted">
+              {d.value && typeof d.value === 'object' && !Array.isArray(d.value)
+                ? Object.keys(d.value as Record<string, string>).length
+                : 0}{' '}
+              entries
             </span>
             <button
               className="var-configure-btn"

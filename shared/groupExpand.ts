@@ -13,6 +13,7 @@ import type {
   PipelineDef,
   PipelineGraphNode,
   PipelineNodeData,
+  VariableKvValue,
   VariableNodeData,
 } from './types';
 
@@ -36,6 +37,61 @@ interface ResolvedIterator {
 }
 
 const SCALAR_LIST_COLUMN = '__value';
+
+/** Resolve the runtime value of an iterator cell — applying kv lookups for
+ *  variable-kind columns. Returns the raw cell value for scalar-kind columns. */
+function resolveCellValue(
+  def: PipelineDef,
+  group: GroupDef,
+  column: IteratorColumn,
+  cell: string | number | boolean | null | undefined,
+): string | number | boolean | null {
+  if (cell === undefined) return null;
+  if (column.kind !== 'variable') return cell ?? null;
+  if (!column.variableRef) {
+    throw new GroupExpansionError(
+      `Group "${group.name}" column "${column.name}" is a variable-kind column without a kv variable reference`,
+      group.id,
+    );
+  }
+  const kvNode = def.nodes.find((n) => n.id === column.variableRef);
+  if (!kvNode || kvNode.type !== 'gstVariable') {
+    throw new GroupExpansionError(
+      `Group "${group.name}" column "${column.name}" references a missing kv variable`,
+      group.id,
+    );
+  }
+  const data = kvNode.data as VariableNodeData;
+  if (data.valueKind !== 'kv' || typeof data.value !== 'object' || data.value === null || Array.isArray(data.value)) {
+    throw new GroupExpansionError(
+      `Group "${group.name}" column "${column.name}" references "${data.varName}" which is not a kv-kind variable`,
+      group.id,
+    );
+  }
+  const map = data.value as VariableKvValue;
+  if (cell === null) return null;
+  const key = String(cell);
+  if (!(key in map)) {
+    // Unknown key — emit empty string so the property is left effectively unset
+    // rather than crashing the unroll. Diagnostics surface this separately.
+    return '';
+  }
+  return map[key];
+}
+
+/** Apply `${col}` substitution against a per-row map of resolved column values. Unknown
+ *  placeholders are kept verbatim so the user can spot typos in the Show-command preview. */
+function evaluateTemplate(
+  template: string,
+  resolved: Record<string, string | number | boolean | null>,
+): string {
+  return template.replace(/\$\{(\w+)\}/g, (m, name: string) => {
+    if (!(name in resolved)) return m;
+    const v = resolved[name];
+    if (v === null || v === undefined) return '';
+    return String(v);
+  });
+}
 
 /** Pull the iterator off the named variable node and normalize to (schema, rows). Throws
  *  GroupExpansionError on any structural problem so callers can surface it. */
@@ -214,9 +270,11 @@ function expandSingleGroup(
   }
   // Pre-resolve each parameter to its driving column. This throws early if a multi-column
   // iterator is missing a `sourceColumn` on any parameter, so we never produce a partial unroll.
+  // Template-mode parameters skip the column requirement — they pull from any (or all)
+  // columns at interpolation time.
   const paramColumns = group.parameters.map((p) => ({
     param: p,
-    column: resolveParameterColumn(group, iter, p),
+    column: p.template ? null : resolveParameterColumn(group, iter, p),
   }));
 
   const memberSet = new Set(group.memberNodeIds);
@@ -235,13 +293,28 @@ function expandSingleGroup(
       intoNodes.push(cloned);
     }
     const row = iter.rows[i] || {};
+    // Pre-resolve every column's effective value for this row once, so kv lookups don't
+    // run more than once even if multiple parameters template against the same column.
+    const resolvedRow: Record<string, string | number | boolean | null> = {};
+    for (const col of iter.schema) {
+      resolvedRow[col.name] = resolveCellValue(def, group, col, row[col.name]);
+    }
     for (const { param, column } of paramColumns) {
       const clonedId = idMap.get(param.targetNodeId);
       if (!clonedId) continue;
       const clonedNode = intoNodes.find((n) => n.id === clonedId);
       if (!clonedNode || clonedNode.type !== 'gstElement') continue;
       const data = clonedNode.data as PipelineNodeData;
-      data.properties[param.propertyKey] = coerceCellToProperty(row[column.name], column.kind);
+      if (param.template) {
+        data.properties[param.propertyKey] = evaluateTemplate(param.template, resolvedRow);
+      } else if (column) {
+        const raw = resolvedRow[column.name];
+        // For 'variable' kind columns the resolved value is always a string (the kv lookup),
+        // so use 'string' coercion; for scalar columns use the column's declared kind.
+        const coerceKind: 'string' | 'number' | 'boolean' =
+          column.kind === 'variable' ? 'string' : column.kind;
+        data.properties[param.propertyKey] = coerceCellToProperty(raw, coerceKind);
+      }
     }
     // Replicate internal edges
     for (const e of internalEdges) {
@@ -419,6 +492,19 @@ export function diagnoseGroups(def: PipelineDef): string[] {
           );
           continue;
         }
+        // Template parameters skip the column requirement; they pull from arbitrary
+        // ${col} placeholders. Diagnose missing columns referenced in the template
+        // for sharper hints, but don't block.
+        if (p.template) {
+          const refs = [...p.template.matchAll(/\$\{(\w+)\}/g)].map((m) => m[1]);
+          const missing = refs.filter((r) => !iter.schema.some((c) => c.name === r));
+          if (missing.length) {
+            out.push(
+              `Group "${g.name}" parameter for ${p.propertyKey} template references unknown column(s): ${missing.join(', ')}.`,
+            );
+          }
+          continue;
+        }
         if (iter.schema.length > 1 && !p.sourceColumn) {
           out.push(
             `Group "${g.name}" parameter for ${p.propertyKey} needs a column pick — iterator has multiple.`,
@@ -428,6 +514,31 @@ export function diagnoseGroups(def: PipelineDef): string[] {
         if (p.sourceColumn && !iter.schema.some((c) => c.name === p.sourceColumn)) {
           out.push(
             `Group "${g.name}" parameter for ${p.propertyKey} binds to column "${p.sourceColumn}" which is no longer in the iterator schema.`,
+          );
+        }
+      }
+      // Surface kv-column issues so the user knows when a referenced kv variable
+      // is missing or has been retyped — even though resolveCellValue would throw
+      // at expand time, this gives a non-blocking inspector-friendly message.
+      for (const col of iter.schema) {
+        if (col.kind !== 'variable') continue;
+        if (!col.variableRef) {
+          out.push(
+            `Group "${g.name}" column "${col.name}" is a variable column without a kv reference.`,
+          );
+          continue;
+        }
+        const kvNode = def.nodes.find((n) => n.id === col.variableRef);
+        if (!kvNode || kvNode.type !== 'gstVariable') {
+          out.push(
+            `Group "${g.name}" column "${col.name}" references a kv variable that's no longer in the pipeline.`,
+          );
+          continue;
+        }
+        const d = kvNode.data as VariableNodeData;
+        if (d.valueKind !== 'kv') {
+          out.push(
+            `Group "${g.name}" column "${col.name}" references "${d.varName}", which is no longer a kv variable.`,
           );
         }
       }

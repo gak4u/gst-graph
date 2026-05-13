@@ -84,18 +84,27 @@ export interface PipelineNodeData {
   [k: string]: unknown;
 }
 
-export type VariableValueKind = 'string' | 'number' | 'boolean' | 'list' | 'record-list';
+export type VariableValueKind = 'string' | 'number' | 'boolean' | 'list' | 'record-list' | 'kv';
 
 // A list-typed variable holds an array of primitives. Items must be all strings, all numbers,
 // or all booleans (we don't support mixed-type lists). Used as the iterator for a GroupDef.
 export type VariableListValue = string[] | number[] | boolean[];
 
-/** One column of a record-list iterator. */
+/** A flat key→string lookup table. Used to express preset libraries (e.g. RTMP endpoints
+ *  per streaming service) that an iterator row can pick from. */
+export type VariableKvValue = Record<string, string>;
+
+/** One column of a record-list iterator.
+ *  - `string` / `number` / `boolean`: cell is a literal scalar of that type.
+ *  - `variable`: cell is a key into the kv variable referenced by `variableRef`. At unroll
+ *    the cell resolves to the kv variable's value for that key.
+ */
 export interface IteratorColumn {
   /** Identifier used as the column name in rows. Also shown in the group's parameter picker. */
   name: string;
-  /** Scalar kind for cells in this column. */
-  kind: 'string' | 'number' | 'boolean';
+  kind: 'string' | 'number' | 'boolean' | 'variable';
+  /** When kind === 'variable', the node id of the referenced kv-typed Variable node. */
+  variableRef?: string;
 }
 
 /** A row in a record-list iterator: cell value keyed by column name. */
@@ -107,8 +116,9 @@ export interface VariableNodeData {
   valueKind: VariableValueKind;
   /** For 'string' / 'number' / 'boolean': the scalar value.
    *  For 'list':         an array of primitives — single anonymous column iterator.
-   *  For 'record-list':  an array of IteratorRow (one per iteration); schema lives in `schema`. */
-  value: string | number | boolean | VariableListValue | IteratorRow[] | null;
+   *  For 'record-list':  an array of IteratorRow (one per iteration); schema lives in `schema`.
+   *  For 'kv':           a flat string→string map (lookup table for iterator cells). */
+  value: string | number | boolean | VariableListValue | IteratorRow[] | VariableKvValue | null;
   /** Column definitions for 'record-list' kind. Ignored for other kinds. */
   schema?: IteratorColumn[];
   description?: string;
@@ -189,6 +199,12 @@ export interface GroupParameter {
   propertyKey: string;
   /** Column name in the iterator's schema; only meaningful for multi-column iterators. */
   sourceColumn?: string;
+  /** Template string with `${col}` placeholders evaluated against the iterator's resolved
+   *  row values (kv-typed columns are resolved to their kv lookup value first). When set,
+   *  the template's evaluated result is assigned to the target property instead of using
+   *  `sourceColumn`. Useful for stitching multiple columns into a single property without
+   *  a transform node, e.g. `${endpoint}${key}` → full RTMP URL. */
+  template?: string;
 }
 
 /** A pad on the group container that forwards to a member node's pad on unroll.

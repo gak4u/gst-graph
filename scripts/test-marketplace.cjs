@@ -803,6 +803,143 @@ function buildFanoutDef(locations) {
   assert(threw instanceof GroupExpansionError, 'empty schema: throws');
 }
 
+// ---- kv variable + variable-column + parameter template ----
+{
+  const groupId = 'g_kv';
+  const def = {
+    id: 'pl_kv', name: 'kv',
+    nodes: [
+      el('vt', 'tee', 'vtee'),
+      // kv variable: service → endpoint URL
+      {
+        id: 'var_endpoints', type: 'gstVariable', position: { x: 0, y: 0 },
+        data: {
+          varName: 'endpoints',
+          valueKind: 'kv',
+          value: {
+            youtube: 'rtmp://a.rtmp.youtube.com/live2/',
+            twitch: 'rtmp://live.twitch.tv/app/',
+          },
+        },
+      },
+      // record-list iterator with one kv-column + one string column
+      {
+        id: 'var_iter', type: 'gstVariable', position: { x: 0, y: 0 },
+        data: {
+          varName: 'targets',
+          valueKind: 'record-list',
+          schema: [
+            { name: 'service', kind: 'variable', variableRef: 'var_endpoints' },
+            { name: 'key', kind: 'string' },
+          ],
+          value: [
+            { service: 'youtube', key: 'abc123' },
+            { service: 'twitch', key: 'xyz789' },
+          ],
+        },
+      },
+      el('flv', 'flvmux', 'flvmux1'),
+      el('rtmp', 'rtmp2sink', 'rtmp2sink1'),
+      { id: groupId, type: 'gstElement', position: { x: 0, y: 0 },
+        data: { elementName: '__group__', instanceName: groupId, properties: {} } },
+    ],
+    edges: [
+      mkStreamEdge('e_fr', 'flv', 'rtmp'),
+    ],
+    groups: [
+      {
+        id: groupId, name: 'g',
+        memberNodeIds: ['flv', 'rtmp'],
+        iteratorVarId: 'var_iter',
+        parameters: [
+          {
+            targetNodeId: 'rtmp',
+            propertyKey: 'location',
+            // Template combines kv-resolved service + literal key column
+            template: '${service}${key}',
+          },
+        ],
+        boundary: [],
+      },
+    ],
+  };
+  const expanded = expandGroups(def);
+  const rtmpClones = expanded.nodes.filter(
+    (n) => n.type === 'gstElement' && n.data.elementName === 'rtmp2sink',
+  );
+  assert(rtmpClones.length === 2, `kv+tmpl: 2 rtmp clones (got ${rtmpClones.length})`);
+  const locations = rtmpClones.map((n) => n.data.properties.location).sort();
+  assert(
+    JSON.stringify(locations) ===
+      JSON.stringify(['rtmp://a.rtmp.youtube.com/live2/abc123', 'rtmp://live.twitch.tv/app/xyz789']),
+    'kv+tmpl: each clone has kv-resolved endpoint + per-row key concatenated',
+  );
+}
+
+// ---- kv missing reference triggers diagnostic ----
+{
+  const def = {
+    id: 'pl_kvmiss', name: 'kvmiss',
+    nodes: [
+      {
+        id: 'var_iter', type: 'gstVariable', position: { x: 0, y: 0 },
+        data: {
+          varName: 'targets', valueKind: 'record-list',
+          schema: [{ name: 'service', kind: 'variable', variableRef: 'var_missing' }],
+          value: [{ service: 'youtube' }],
+        },
+      },
+      el('flv', 'flvmux', 'flv'),
+    ],
+    edges: [],
+    groups: [{
+      id: 'g', name: 'g', memberNodeIds: ['flv'], iteratorVarId: 'var_iter',
+      parameters: [], boundary: [],
+    }],
+  };
+  const diag = diagnoseGroups(def);
+  assert(
+    diag.some((m) => /kv variable that's no longer in the pipeline/.test(m)),
+    'kv missing ref: diagnoseGroups surfaces missing kv variable',
+  );
+}
+
+// ---- kv with unknown key in row resolves to empty string ----
+{
+  const def = {
+    id: 'pl_kvunk', name: 'kvunk',
+    nodes: [
+      {
+        id: 'kv1', type: 'gstVariable', position: { x: 0, y: 0 },
+        data: { varName: 'kv1', valueKind: 'kv', value: { a: 'A_VAL' } },
+      },
+      {
+        id: 'iter', type: 'gstVariable', position: { x: 0, y: 0 },
+        data: {
+          varName: 'iter', valueKind: 'record-list',
+          schema: [{ name: 'pick', kind: 'variable', variableRef: 'kv1' }],
+          value: [{ pick: 'a' }, { pick: 'missing-key' }],
+        },
+      },
+      el('e1', 'rtmp2sink', 'r1'),
+    ],
+    edges: [],
+    groups: [{
+      id: 'g', name: 'g', memberNodeIds: ['e1'], iteratorVarId: 'iter',
+      parameters: [{ targetNodeId: 'e1', propertyKey: 'location' }],
+      boundary: [],
+    }],
+  };
+  const expanded = expandGroups(def);
+  const clones = expanded.nodes
+    .filter((n) => n.type === 'gstElement' && n.data.elementName === 'rtmp2sink')
+    .map((n) => n.data.properties.location);
+  assert(
+    JSON.stringify(clones.sort()) === JSON.stringify(['', 'A_VAL']),
+    'kv unknown key: resolves to "" rather than crashing',
+  );
+}
+
 // No groups: pass-through (deep copy semantics not required, but groups[] must be empty)
 {
   const def = {

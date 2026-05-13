@@ -15,6 +15,7 @@ import type {
   TransformInput,
   TransformKind,
   TransformNodeData,
+  VariableKvValue,
   VariableNodeData,
   VariableValueKind,
 } from '@shared/types';
@@ -127,6 +128,25 @@ interface State {
     rowIndex: number,
     column: string,
     value: string | number | boolean | null,
+  ) => void;
+  // KV variable editing
+  setKvEntry: (variableNodeId: string, key: string, value: string) => void;
+  setKvEntryIn: (pipelineId: string, variableNodeId: string, key: string, value: string) => void;
+  removeKvEntry: (variableNodeId: string, key: string) => void;
+  removeKvEntryIn: (pipelineId: string, variableNodeId: string, key: string) => void;
+  renameKvKey: (variableNodeId: string, oldKey: string, newKey: string) => void;
+  // Iterator column variable-ref edits (only for kind === 'variable' columns)
+  setIteratorColumnVariableRef: (
+    variableNodeId: string,
+    columnName: string,
+    kvNodeId: string,
+  ) => void;
+  // Group parameter template (alternative to sourceColumn)
+  setGroupParameterTemplate: (
+    groupId: string,
+    targetNodeId: string,
+    propertyKey: string,
+    template: string | undefined,
   ) => void;
 }
 
@@ -1152,6 +1172,123 @@ export const useStore = create<State>((set, get) => ({
         rows[rowIndex] = { ...rows[rowIndex], [column]: value };
         return { ...n, data: { ...d, value: rows } };
       });
+    });
+  },
+
+  // ===== KV variable (flat string→string map) =====
+  // A kv variable stores presets keyed by name (e.g. service → endpoint URL). Iterator
+  // columns of kind 'variable' reference one and present its keys as a dropdown per cell.
+  setKvEntry: (variableNodeId, key, value) => {
+    const id = get().activePipelineId;
+    if (!id) return;
+    get().setKvEntryIn(id, variableNodeId, key, value);
+  },
+
+  setKvEntryIn: (pipelineId, variableNodeId, key, value) => {
+    if (!key.trim()) return;
+    get().updatePipeline(pipelineId, (p) => {
+      p.nodes = p.nodes.map((n) => {
+        if (n.id !== variableNodeId || n.type !== 'gstVariable') return n;
+        const d = n.data as VariableNodeData;
+        const map: VariableKvValue =
+          d.value && typeof d.value === 'object' && !Array.isArray(d.value)
+            ? { ...(d.value as VariableKvValue) }
+            : {};
+        map[key] = value;
+        return { ...n, data: { ...d, valueKind: 'kv', value: map } };
+      });
+    });
+  },
+
+  removeKvEntry: (variableNodeId, key) => {
+    const id = get().activePipelineId;
+    if (!id) return;
+    get().removeKvEntryIn(id, variableNodeId, key);
+  },
+
+  removeKvEntryIn: (pipelineId, variableNodeId, key) => {
+    get().updatePipeline(pipelineId, (p) => {
+      p.nodes = p.nodes.map((n) => {
+        if (n.id !== variableNodeId || n.type !== 'gstVariable') return n;
+        const d = n.data as VariableNodeData;
+        if (!d.value || typeof d.value !== 'object' || Array.isArray(d.value)) return n;
+        const map: VariableKvValue = { ...(d.value as VariableKvValue) };
+        delete map[key];
+        return { ...n, data: { ...d, value: map } };
+      });
+    });
+  },
+
+  renameKvKey: (variableNodeId, oldKey, newKey) => {
+    const trimmed = newKey.trim();
+    if (!trimmed || trimmed === oldKey) return;
+    const active = get().pipelines.find((p) => p.id === get().activePipelineId);
+    if (!active) return;
+    get().updatePipeline(active.id, (p) => {
+      p.nodes = p.nodes.map((n) => {
+        if (n.id !== variableNodeId || n.type !== 'gstVariable') return n;
+        const d = n.data as VariableNodeData;
+        if (!d.value || typeof d.value !== 'object' || Array.isArray(d.value)) return n;
+        const map = { ...(d.value as VariableKvValue) };
+        if (!(oldKey in map)) return n;
+        map[trimmed] = map[oldKey];
+        delete map[oldKey];
+        return { ...n, data: { ...d, value: map } };
+      });
+      // Update any iterator rows that used the renamed key as a cell value in a column
+      // referencing this kv variable. Without this, the rename silently breaks
+      // existing iterator cells.
+      for (const iter of p.nodes) {
+        if (iter.type !== 'gstVariable') continue;
+        const d = iter.data as VariableNodeData;
+        if (d.valueKind !== 'record-list') continue;
+        const schema = d.schema || [];
+        const cols = schema.filter((c) => c.kind === 'variable' && c.variableRef === variableNodeId);
+        if (cols.length === 0) continue;
+        if (!Array.isArray(d.value)) continue;
+        const rows = (d.value as IteratorRow[]).map((row) => {
+          const next: IteratorRow = { ...row };
+          for (const c of cols) {
+            if (next[c.name] === oldKey) next[c.name] = trimmed;
+          }
+          return next;
+        });
+        iter.data = { ...d, value: rows } as VariableNodeData;
+      }
+    });
+  },
+
+  setIteratorColumnVariableRef: (variableNodeId, columnName, kvNodeId) => {
+    const active = get().pipelines.find((p) => p.id === get().activePipelineId);
+    if (!active) return;
+    get().updatePipeline(active.id, (p) => {
+      p.nodes = p.nodes.map((n) => {
+        if (n.id !== variableNodeId || n.type !== 'gstVariable') return n;
+        const d = n.data as VariableNodeData;
+        const schema = (d.schema || []).map((c) =>
+          c.name === columnName ? { ...c, kind: 'variable' as const, variableRef: kvNodeId } : c,
+        );
+        return { ...n, data: { ...d, schema } };
+      });
+    });
+  },
+
+  setGroupParameterTemplate: (groupId, targetNodeId, propertyKey, template) => {
+    const active = get().pipelines.find((p) => p.id === get().activePipelineId);
+    if (!active) return;
+    get().updatePipeline(active.id, (p) => {
+      p.groups = (p.groups || []).map((g) =>
+        g.id !== groupId
+          ? g
+          : {
+              ...g,
+              parameters: g.parameters.map((pr) =>
+                pr.targetNodeId === targetNodeId && pr.propertyKey === propertyKey
+                  ? { ...pr, template }
+                  : pr,
+              ),
+            },
+      );
     });
   },
 }));
