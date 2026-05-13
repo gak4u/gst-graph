@@ -1,5 +1,5 @@
-import { memo, useMemo } from 'react';
-import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { memo, useEffect, useMemo } from 'react';
+import { Handle, Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import { useStore } from '../state/store';
 import type {
   GroupDef,
@@ -14,18 +14,43 @@ import type {
 export const GroupNode = memo(({ id, selected }: NodeProps) => {
   const pipeline = useStore((s) => s.pipelines.find((p) => p.id === s.activePipelineId));
   const group: GroupDef | undefined = pipeline?.groups?.find((g) => g.id === id);
+  const updateNodeInternals = useUpdateNodeInternals();
+
+  // Tell xyflow to remeasure this node every time the boundary changes (and after
+  // hydration when this component first sees the saved boundary). Without this,
+  // boundary handles that load from disk are registered too late for the existing
+  // edges that point at them — the edges render as floating lines that don't
+  // anchor, and new connection drags onto them silently fail.
+  const boundaryKey = useMemo(
+    () =>
+      (group?.boundary || []).map((b) => `${b.direction}:${b.handleId}`).join('|'),
+    [group?.boundary],
+  );
+  useEffect(() => {
+    updateNodeInternals(id);
+  }, [id, boundaryKey, updateNodeInternals]);
 
   const iteratorMeta = useMemo(() => {
     if (!group || !pipeline) return { count: 0, label: 'no iterator', warn: true };
+    if (!group.iteratorVarId) return { count: 0, label: 'no iterator picked', warn: true };
     const v = pipeline.nodes.find((n) => n.id === group.iteratorVarId);
     if (!v || v.type !== 'gstVariable') {
       return { count: 0, label: 'iterator missing', warn: true };
     }
     const data = v.data as VariableNodeData;
-    if (data.valueKind !== 'list' || !Array.isArray(data.value)) {
-      return { count: 0, label: `iterator $${data.varName} not a list`, warn: true };
+    if (data.valueKind === 'list' && Array.isArray(data.value)) {
+      return { count: data.value.length, label: `$${data.varName}`, warn: data.value.length === 0 };
     }
-    return { count: data.value.length, label: `$${data.varName}`, warn: false };
+    if (data.valueKind === 'record-list' && Array.isArray(data.value)) {
+      const count = data.value.length;
+      const cols = (data.schema || []).length;
+      return {
+        count,
+        label: `$${data.varName} · ${cols} col${cols === 1 ? '' : 's'}`,
+        warn: count === 0 || cols === 0,
+      };
+    }
+    return { count: 0, label: `iterator $${data.varName} is not a list`, warn: true };
   }, [pipeline, group]);
 
   const memberPreview = useMemo(() => {

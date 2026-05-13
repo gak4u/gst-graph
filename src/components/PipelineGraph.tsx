@@ -268,9 +268,23 @@ function GraphInner() {
     // is wired up). Edges with at least one hidden endpoint either represent internal
     // group wiring (kept on disk, replicated by the unroll pre-pass) or boundary
     // mismatches that the inspector will surface.
-    return pipeline.edges.filter(
+    const visible = pipeline.edges.filter(
       (e) => !hiddenMemberIds.has(e.source) && !hiddenMemberIds.has(e.target),
-    ) as unknown as Edge[];
+    );
+    // Dedupe edges that share (source, target, sourceHandle, targetHandle). Saved
+    // pipelines from older versions sometimes have two parallel edges that resolve
+    // to the same wire (e.g. one with `src:src_%u` and one with `src:src_0` both
+    // pointing at the same flvmux.video). xyflow renders them stacked, which makes
+    // hit-testing for new connections on neighboring handles unreliable.
+    const seen = new Set<string>();
+    const out: typeof visible = [];
+    for (const e of visible) {
+      const key = `${e.source}|${e.sourceHandle ?? ''}|${e.target}|${e.targetHandle ?? ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(e);
+    }
+    return out as unknown as Edge[];
   }, [pipeline, hiddenMemberIds]);
 
   if (!pipeline) return <div className="empty-state">No pipeline selected.</div>;
