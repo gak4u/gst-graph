@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useStore } from '../state/store';
 import { PropertyEditor } from './PropertyEditor';
+import { IteratorModal } from './IteratorModal';
 import type {
   GstElementDetail,
   GstPropertyDef,
@@ -298,7 +299,7 @@ export function PropertiesPanel() {
                 }}
               />
             ) : vd.valueKind === 'record-list' ? (
-              <IteratorTableEditor variableNodeId={node.id} data={vd} />
+              <IteratorEditorButton variableNodeId={node.id} data={vd} />
             ) : (
               <input
                 value={vd.value == null ? '' : String(vd.value)}
@@ -692,182 +693,55 @@ export function PropertiesPanel() {
   );
 }
 
-interface IteratorTableEditorProps {
+interface IteratorEditorButtonProps {
   variableNodeId: string;
   data: VariableNodeData;
 }
 
-function IteratorTableEditor({ variableNodeId, data }: IteratorTableEditorProps) {
-  const addColumn = useStore((s) => s.addIteratorColumn);
-  const removeColumn = useStore((s) => s.removeIteratorColumn);
-  const renameColumn = useStore((s) => s.renameIteratorColumn);
-  const setKind = useStore((s) => s.setIteratorColumnKind);
-  const addRow = useStore((s) => s.addIteratorRow);
-  const removeRow = useStore((s) => s.removeIteratorRow);
-  const setCell = useStore((s) => s.setIteratorCell);
-
-  const schema: IteratorColumn[] = data.schema || [];
-  const rows: IteratorRow[] = Array.isArray(data.value) ? (data.value as IteratorRow[]) : [];
-
-  const [newColName, setNewColName] = useState('');
-  const [newColKind, setNewColKind] = useState<IteratorColumn['kind']>('string');
-
-  function commitColumn() {
-    if (!newColName.trim()) return;
-    addColumn(variableNodeId, newColName, newColKind);
-    setNewColName('');
-  }
+function IteratorEditorButton({ variableNodeId, data }: IteratorEditorButtonProps) {
+  const [open, setOpen] = useState(false);
+  const activeId = useStore((s) => s.activePipelineId);
+  const schema = data.schema || [];
+  const rows = Array.isArray(data.value) ? (data.value as IteratorRow[]) : [];
 
   return (
-    <div className="iter-editor">
-      {schema.length === 0 ? (
-        <div className="muted" style={{ marginBottom: 8 }}>
-          No columns yet. Add at least one to define what each iteration row holds.
-        </div>
-      ) : (
-        <div className="iter-table-wrap">
-          <table className="iter-table">
-            <thead>
-              <tr>
-                <th style={{ width: 24 }}>#</th>
+    <>
+      <div className="iter-summary-row">
+        <div className="iter-summary-meta">
+          {schema.length === 0 ? (
+            <span className="muted">No columns yet</span>
+          ) : (
+            <>
+              <span>
+                {schema.length} col{schema.length === 1 ? '' : 's'}
+              </span>
+              <span className="muted"> · </span>
+              <span>
+                {rows.length} row{rows.length === 1 ? '' : 's'}
+              </span>
+              <div className="muted iter-summary-cols">
                 {schema.map((c) => (
-                  <th key={c.name}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                      <input
-                        defaultValue={c.name}
-                        onBlur={(e) =>
-                          e.target.value !== c.name &&
-                          renameColumn(variableNodeId, c.name, e.target.value)
-                        }
-                        style={{ fontWeight: 600 }}
-                      />
-                      <select
-                        value={c.kind}
-                        onChange={(e) =>
-                          setKind(variableNodeId, c.name, e.target.value as IteratorColumn['kind'])
-                        }
-                      >
-                        <option value="string">string</option>
-                        <option value="number">number</option>
-                        <option value="boolean">boolean</option>
-                      </select>
-                    </div>
-                  </th>
+                  <code key={c.name}>
+                    {c.name}
+                    <span className="iter-summary-kind">{c.kind}</span>
+                  </code>
                 ))}
-                <th style={{ width: 36 }}></th>
-              </tr>
-              <tr>
-                <th></th>
-                {schema.map((c) => (
-                  <th key={`${c.name}-drop`} style={{ textAlign: 'right' }}>
-                    <button
-                      className="ghost"
-                      title={`Remove column ${c.name}`}
-                      onClick={() => removeColumn(variableNodeId, c.name)}
-                    >
-                      ✕
-                    </button>
-                  </th>
-                ))}
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 && (
-                <tr>
-                  <td colSpan={schema.length + 2} className="muted" style={{ padding: 8 }}>
-                    No rows yet. Click <code>+ add row</code> below.
-                  </td>
-                </tr>
-              )}
-              {rows.map((row, i) => (
-                <tr key={i}>
-                  <td className="muted">{i + 1}</td>
-                  {schema.map((c) => (
-                    <td key={c.name}>
-                      <IteratorCellInput
-                        column={c}
-                        value={row[c.name]}
-                        onChange={(v) => setCell(variableNodeId, i, c.name, v)}
-                      />
-                    </td>
-                  ))}
-                  <td>
-                    <button
-                      className="ghost"
-                      title="Delete row"
-                      onClick={() => removeRow(variableNodeId, i)}
-                    >
-                      ✕
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+              </div>
+            </>
+          )}
         </div>
-      )}
-      <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-        <input
-          placeholder="new column name"
-          value={newColName}
-          onChange={(e) => setNewColName(e.target.value.replace(/[^a-zA-Z0-9_]/g, '_'))}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') commitColumn();
-          }}
-          style={{ flex: 1 }}
+        <button className="primary" onClick={() => setOpen(true)}>
+          Edit rows…
+        </button>
+      </div>
+      {open && activeId && (
+        <IteratorModal
+          pipelineId={activeId}
+          variableNodeId={variableNodeId}
+          onClose={() => setOpen(false)}
         />
-        <select
-          value={newColKind}
-          onChange={(e) => setNewColKind(e.target.value as IteratorColumn['kind'])}
-        >
-          <option value="string">string</option>
-          <option value="number">number</option>
-          <option value="boolean">boolean</option>
-        </select>
-        <button disabled={!newColName.trim()} onClick={commitColumn}>
-          + column
-        </button>
-      </div>
-      <div style={{ marginTop: 6 }}>
-        <button disabled={schema.length === 0} onClick={() => addRow(variableNodeId)}>
-          + add row
-        </button>
-      </div>
-    </div>
-  );
-}
-
-interface IteratorCellInputProps {
-  column: IteratorColumn;
-  value: string | number | boolean | null | undefined;
-  onChange: (v: string | number | boolean | null) => void;
-}
-
-function IteratorCellInput({ column, value, onChange }: IteratorCellInputProps) {
-  if (column.kind === 'boolean') {
-    return (
-      <input
-        type="checkbox"
-        checked={value === true || value === 'true'}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-    );
-  }
-  if (column.kind === 'number') {
-    return (
-      <input
-        type="number"
-        value={value === null || value === undefined ? '' : Number(value)}
-        onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
-      />
-    );
-  }
-  return (
-    <input
-      value={value === null || value === undefined ? '' : String(value)}
-      onChange={(e) => onChange(e.target.value)}
-    />
+      )}
+    </>
   );
 }
 

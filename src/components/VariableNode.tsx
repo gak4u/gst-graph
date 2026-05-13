@@ -1,7 +1,8 @@
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { useStore } from '../state/store';
-import type { VariableNodeData } from '@shared/types';
+import type { IteratorRow, VariableNodeData } from '@shared/types';
+import { IteratorModal } from './IteratorModal';
 
 export const VariableNode = memo(({ id, data, selected }: NodeProps) => {
   const d = data as unknown as VariableNodeData;
@@ -9,11 +10,17 @@ export const VariableNode = memo(({ id, data, selected }: NodeProps) => {
   const updateVariableValue = useStore((s) => s.updateVariableValue);
   const updateVariableKind = useStore((s) => s.updateVariableKind);
   const toggleVariableHidden = useStore((s) => s.toggleVariableHidden);
+  const activePipelineId = useStore((s) => s.activePipelineId);
+  const [modalOpen, setModalOpen] = useState(false);
+
+  const isList = d.valueKind === 'list';
+  const isRecord = d.valueKind === 'record-list';
+  const isIterator = isList || isRecord;
 
   return (
     <div className={`var-node ${selected ? 'selected' : ''} ${d.hidden ? 'hidden' : ''}`}>
       <div className="var-node-header">
-        <span className="var-badge">{d.hidden ? 'CONST' : 'VAR'}</span>
+        <span className="var-badge">{d.hidden ? 'CONST' : isIterator ? 'ITER' : 'VAR'}</span>
         <div className="var-name-block">
           <input
             className="var-label-input"
@@ -44,7 +51,7 @@ export const VariableNode = memo(({ id, data, selected }: NodeProps) => {
         <div className="var-node-kind-row">
           <span className="var-node-kind-label">type</span>
           <div className="var-node-kind-pills">
-            {(['string', 'number', 'boolean'] as const).map((k) => (
+            {(['string', 'number', 'boolean', 'list', 'record-list'] as const).map((k) => (
               <button
                 key={k}
                 className={`var-node-kind-pill ${d.valueKind === k ? 'active' : ''}`}
@@ -55,11 +62,22 @@ export const VariableNode = memo(({ id, data, selected }: NodeProps) => {
                 onMouseDown={(e) => e.stopPropagation()}
                 title={`Set variable type to ${k}`}
               >
-                {k === 'string' ? 'str' : k === 'number' ? 'num' : 'bool'}
+                {k === 'string'
+                  ? 'str'
+                  : k === 'number'
+                    ? 'num'
+                    : k === 'boolean'
+                      ? 'bool'
+                      : k === 'list'
+                        ? 'list'
+                        : 'rows'}
               </button>
             ))}
           </div>
         </div>
+        {/* Scalar value editors for str/num/bool; iterator kinds get a summary + open-modal button.
+            Falling back to String(d.value) for an array/object value was producing
+            "[object Object],..." in the input field. */}
         {d.valueKind === 'boolean' ? (
           <label className="var-bool">
             <input
@@ -80,6 +98,40 @@ export const VariableNode = memo(({ id, data, selected }: NodeProps) => {
             }
             onMouseDown={(e) => e.stopPropagation()}
           />
+        ) : isList ? (
+          <div className="var-iter-summary">
+            <span className="muted">
+              {Array.isArray(d.value) ? `${(d.value as unknown[]).length} item${(d.value as unknown[]).length === 1 ? '' : 's'}` : 'no items'}
+            </span>
+            <button
+              className="var-configure-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                setModalOpen(true);
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              Configure…
+            </button>
+          </div>
+        ) : isRecord ? (
+          <div className="var-iter-summary">
+            <span className="muted">
+              {(d.schema || []).length} col{(d.schema || []).length === 1 ? '' : 's'} ·{' '}
+              {Array.isArray(d.value) ? (d.value as IteratorRow[]).length : 0} row
+              {Array.isArray(d.value) && (d.value as IteratorRow[]).length === 1 ? '' : 's'}
+            </span>
+            <button
+              className="var-configure-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                setModalOpen(true);
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              Configure…
+            </button>
+          </div>
         ) : (
           <input
             className="var-value-input"
@@ -98,6 +150,13 @@ export const VariableNode = memo(({ id, data, selected }: NodeProps) => {
         className="var-handle"
         style={{ right: -6, top: '50%', transform: 'translate(0, -50%)' }}
       />
+      {modalOpen && activePipelineId && (
+        <IteratorModal
+          pipelineId={activePipelineId}
+          variableNodeId={id}
+          onClose={() => setModalOpen(false)}
+        />
+      )}
     </div>
   );
 });
