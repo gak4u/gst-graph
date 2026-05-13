@@ -618,6 +618,92 @@ function buildFanoutDef(locations) {
   assert(boundary.length === 1, '1-iter: one boundary clone edge');
 }
 
+// ---- installer remaps groups + iterator + kv refs through clonePipelineWithFreshIds ----
+{
+  group('install: group + iterator + kv ID remap');
+  const { clonePipelineWithFreshIds } = require(path.join(BUILD_DIR, 'installApply.js'));
+  const def = {
+    id: 'pl_orig', name: 'Orig',
+    nodes: [
+      { id: 'vt', type: 'gstElement', position: { x: 0, y: 0 },
+        data: { elementName: 'tee', instanceName: 'vtee', properties: {} } },
+      { id: 'kv', type: 'gstVariable', position: { x: 0, y: 0 },
+        data: { varName: 'kv', valueKind: 'kv', value: { a: 'A' } } },
+      { id: 'iter', type: 'gstVariable', position: { x: 0, y: 0 },
+        data: {
+          varName: 'iter',
+          valueKind: 'record-list',
+          schema: [{ name: 'svc', kind: 'variable', variableRef: 'kv' }],
+          value: [{ svc: 'a' }],
+        } },
+      { id: 'flv', type: 'gstElement', position: { x: 0, y: 0 },
+        data: { elementName: 'flvmux', instanceName: 'flv', properties: {} } },
+      { id: 'rtmp', type: 'gstElement', position: { x: 0, y: 0 },
+        data: { elementName: 'rtmp2sink', instanceName: 'rtmp', properties: {} } },
+      { id: 'group_id', type: 'gstGroup', position: { x: 0, y: 0 },
+        data: { groupId: 'group_id' } },
+    ],
+    edges: [
+      // External edge → container's boundary handle (= encodes inner member id in handle)
+      { id: 'e_b', source: 'vt', target: 'group_id',
+        sourceHandle: 'src:src_%u', targetHandle: 'sink:flv_video',
+        data: { edgeKind: 'stream' } },
+      // Internal member→member
+      { id: 'e_int', source: 'flv', target: 'rtmp',
+        sourceHandle: 'src:src', targetHandle: 'sink:sink',
+        data: { edgeKind: 'stream' } },
+    ],
+    groups: [{
+      id: 'group_id', name: 'g',
+      memberNodeIds: ['flv', 'rtmp'],
+      iteratorVarId: 'iter',
+      parameters: [{ targetNodeId: 'rtmp', propertyKey: 'location', sourceColumn: 'svc' }],
+      boundary: [{
+        handleId: 'sink:flv_video', direction: 'sink',
+        memberNodeId: 'flv', memberPadName: 'video',
+      }],
+    }],
+  };
+  const { cloned, nodeIdMap } = clonePipelineWithFreshIds(def, 'Renamed');
+  // No node still has an old id; old ids only legitimately survive as instanceName /
+  // varName values (display fields). Check id field specifically.
+  for (const n of cloned.nodes) {
+    assert(
+      !['vt', 'kv', 'iter', 'flv', 'rtmp', 'group_id'].includes(n.id),
+      `install remap: node.id "${n.id}" not from original`,
+    );
+  }
+  for (const e of cloned.edges) {
+    assert(
+      !['vt', 'kv', 'iter', 'flv', 'rtmp', 'group_id'].includes(e.source) &&
+        !['vt', 'kv', 'iter', 'flv', 'rtmp', 'group_id'].includes(e.target),
+      `install remap: edge endpoints "${e.source}"→"${e.target}" not from original`,
+    );
+  }
+  // Group fields are remapped to the new ids
+  const newGroup = cloned.groups[0];
+  const newFlvId = nodeIdMap.get('flv');
+  const newRtmpId = nodeIdMap.get('rtmp');
+  const newIterId = nodeIdMap.get('iter');
+  const newKvId = nodeIdMap.get('kv');
+  const newGroupId = nodeIdMap.get('group_id');
+  assert(newGroup.id === newGroupId, 'install remap: group.id remapped');
+  assert(newGroup.memberNodeIds.includes(newFlvId), 'install remap: memberNodeIds remapped');
+  assert(newGroup.iteratorVarId === newIterId, 'install remap: iteratorVarId remapped');
+  assert(newGroup.parameters[0].targetNodeId === newRtmpId, 'install remap: parameter targetNodeId remapped');
+  assert(newGroup.boundary[0].memberNodeId === newFlvId, 'install remap: boundary memberNodeId remapped');
+  assert(newGroup.boundary[0].handleId === `sink:${newFlvId}_video`, 'install remap: boundary handleId rebuilt with new member id');
+  // The outside-to-group edge's targetHandle was rewritten to the new boundary handle
+  const boundaryEdge = cloned.edges.find((e) => e.target === newGroupId);
+  assert(boundaryEdge.targetHandle === `sink:${newFlvId}_video`, 'install remap: external boundary edge targetHandle rewritten');
+  // The kv reference in the record-list column is remapped
+  const iterNode = cloned.nodes.find((n) => n.id === newIterId);
+  assert(iterNode.data.schema[0].variableRef === newKvId, 'install remap: column variableRef remapped');
+  // The group container's data.groupId tracks the new id
+  const containerNode = cloned.nodes.find((n) => n.id === newGroupId);
+  assert(containerNode.data.groupId === newGroupId, 'install remap: container data.groupId tracks new id');
+}
+
 // ---- record-list iterator ----
 {
   const groupId = 'g_records';

@@ -1,4 +1,11 @@
-import type { PipelineDef, PipelineGraphNode, VariableNodeData } from './types';
+import type {
+  GroupBoundaryPad,
+  GroupDef,
+  GroupParameter,
+  PipelineDef,
+  PipelineGraphNode,
+  VariableNodeData,
+} from './types';
 import type { PackageManifest, PackageVariableDefault } from './marketplace';
 
 export class PipelineShapeError extends Error {
@@ -177,6 +184,76 @@ export function clonePipelineWithFreshIds(
       data: edgeData,
     });
   }
+
+  // ===== Group remapping =====
+  // Groups, iterator references, kv references, and boundary handle ids all contain
+  // node-id references that need to be remapped via the same nodeIdMap. Without this
+  // pass, installing a package containing groups silently breaks every group binding.
+  const oldGroups = pipeline.groups || [];
+  if (oldGroups.length > 0) {
+    const handleIdRemap = new Map<string, string>();
+    const newGroups: GroupDef[] = oldGroups.map((g) => {
+      const newGroupId = nodeIdMap.get(g.id) || g.id;
+      const newMemberIds = g.memberNodeIds
+        .map((m) => nodeIdMap.get(m))
+        .filter((x): x is string => !!x);
+      const newIteratorVarId = g.iteratorVarId
+        ? nodeIdMap.get(g.iteratorVarId) || g.iteratorVarId
+        : '';
+      const newParameters: GroupParameter[] = g.parameters.map((p) => ({
+        ...p,
+        targetNodeId: nodeIdMap.get(p.targetNodeId) || p.targetNodeId,
+      }));
+      const newBoundary: GroupBoundaryPad[] = g.boundary.map((b) => {
+        const newMember = nodeIdMap.get(b.memberNodeId) || b.memberNodeId;
+        const newHandleId = `${b.direction}:${newMember}_${b.memberPadName}`;
+        handleIdRemap.set(b.handleId, newHandleId);
+        return { ...b, memberNodeId: newMember, handleId: newHandleId };
+      });
+      return {
+        ...g,
+        id: newGroupId,
+        memberNodeIds: newMemberIds,
+        iteratorVarId: newIteratorVarId,
+        parameters: newParameters,
+        boundary: newBoundary,
+      };
+    });
+    cloned.groups = newGroups;
+    // Edges whose handles referenced the old boundary handle ids get rewritten too —
+    // both targetHandle (outside→group) and sourceHandle (group→outside).
+    for (const e of cloned.edges) {
+      if (e.sourceHandle && handleIdRemap.has(e.sourceHandle)) {
+        e.sourceHandle = handleIdRemap.get(e.sourceHandle)!;
+      }
+      if (e.targetHandle && handleIdRemap.has(e.targetHandle)) {
+        e.targetHandle = handleIdRemap.get(e.targetHandle)!;
+      }
+    }
+  }
+
+  // gstGroup container's data.groupId is a self-reference back to the group id;
+  // when the node id changes, that field has to follow.
+  for (const n of cloned.nodes) {
+    if (n.type === 'gstGroup') {
+      n.data = { ...n.data, groupId: n.id };
+    }
+  }
+
+  // Record-list iterator columns of kind 'variable' reference a kv variable by node id.
+  // Remap so the column still points at the cloned kv after install.
+  for (const n of cloned.nodes) {
+    if (n.type !== 'gstVariable') continue;
+    const d = n.data as VariableNodeData;
+    if (d.valueKind !== 'record-list' || !d.schema) continue;
+    const newSchema = d.schema.map((col) => {
+      if (col.kind !== 'variable' || !col.variableRef) return col;
+      const newRef = nodeIdMap.get(col.variableRef);
+      return newRef ? { ...col, variableRef: newRef } : col;
+    });
+    n.data = { ...d, schema: newSchema };
+  }
+
   return { cloned, nodeIdMap };
 }
 
