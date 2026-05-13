@@ -244,17 +244,34 @@ function GraphInner() {
     [elements, addNodeFromElement, rf],
   );
 
+  const hiddenMemberIds = useMemo<Set<string>>(() => {
+    const ids = new Set<string>();
+    if (!pipeline) return ids;
+    for (const g of pipeline.groups || []) {
+      for (const m of g.memberNodeIds) ids.add(m);
+    }
+    return ids;
+  }, [pipeline]);
+
   const nodes = useMemo<Node[]>(() => {
     if (!pipeline) return [];
     // Collapsed-only group rendering: hide every member node, the container stands in
     // for the whole prototype on the canvas. Inspector lets the user edit members.
-    const memberIds = new Set<string>();
-    for (const g of pipeline.groups || []) {
-      for (const m of g.memberNodeIds) memberIds.add(m);
-    }
-    return pipeline.nodes.filter((n) => !memberIds.has(n.id)) as unknown as Node[];
-  }, [pipeline]);
-  const edges = useMemo<Edge[]>(() => (pipeline?.edges as unknown as Edge[]) || [], [pipeline]);
+    return pipeline.nodes.filter((n) => !hiddenMemberIds.has(n.id)) as unknown as Node[];
+  }, [pipeline, hiddenMemberIds]);
+  const edges = useMemo<Edge[]>(() => {
+    if (!pipeline) return [];
+    // Drop edges whose endpoints are hidden group-member nodes. xyflow refuses to
+    // render an edge whose source/target isn't in the node list, but the unanchored
+    // edge can still interfere with handle hit-testing on neighboring visible nodes
+    // (most visibly: tee handles stop accepting connections after a member of a group
+    // is wired up). Edges with at least one hidden endpoint either represent internal
+    // group wiring (kept on disk, replicated by the unroll pre-pass) or boundary
+    // mismatches that the inspector will surface.
+    return pipeline.edges.filter(
+      (e) => !hiddenMemberIds.has(e.source) && !hiddenMemberIds.has(e.target),
+    ) as unknown as Edge[];
+  }, [pipeline, hiddenMemberIds]);
 
   if (!pipeline) return <div className="empty-state">No pipeline selected.</div>;
 
