@@ -195,7 +195,12 @@ function PackageCard({
 }): JSX.Element {
   const { manifest, compatibility } = card;
   const tags = manifest.tags || [];
-  const repoUrl = `https://github.com/${card.repo}`;
+  // Deep-link straight to the package folder so GitHub auto-renders that folder's
+  // README. Fall back to the repo root for single-package repos with the manifest
+  // at root (packagePath === '').
+  const repoUrl = card.packagePath
+    ? `https://github.com/${card.repo}/tree/${card.defaultBranch}/${card.packagePath}`
+    : `https://github.com/${card.repo}`;
   const compatLabel = compatibility.compatible
     ? 'Ready to install'
     : `Missing ${compatibility.missingRequired.length} plugin${compatibility.missingRequired.length === 1 ? '' : 's'}`;

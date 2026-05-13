@@ -149,6 +149,7 @@ export async function searchMarketplace(input: SearchInput): Promise<Marketplace
         cards.push({
           repo: repo.fullName,
           packageId: pkg.packageId,
+          packagePath: pkg.pipelinesPath,
           manifest: pkg.manifest,
           repoStars: repo.stargazersCount,
           repoDescription: repo.description ?? undefined,

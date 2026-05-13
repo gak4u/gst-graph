@@ -110,6 +110,11 @@ export interface ResolvedPackage {
 export interface MarketplacePackageCard {
   repo: string;
   packageId: string;
+  /** Path within the repo where the package's manifest + pipelines live. Empty
+   *  string for single-package repos that have the manifest at the root. Used by
+   *  the UI to deep-link "View on GitHub" to the package folder so the README
+   *  renders for the package, not for the whole repo. */
+  packagePath: string;
   manifest: PackageManifest;
   repoStars: number;
   repoDescription?: string;
