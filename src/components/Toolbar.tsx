@@ -138,7 +138,7 @@ export function Toolbar() {
           title={
             canGroup
               ? `Wrap ${selectedElementIds.length} selected elements in a loopable group`
-              : 'Select 2+ element nodes to enable grouping'
+              : 'Select 2+ element nodes first (drag a box on empty canvas, or ⌘-click each node) to enable grouping'
           }
         >
           ⤓ Group selected

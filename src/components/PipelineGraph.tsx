@@ -5,6 +5,7 @@ import {
   Background,
   Controls,
   MiniMap,
+  SelectionMode,
   applyNodeChanges,
   applyEdgeChanges,
   type Connection,
@@ -276,6 +277,12 @@ function GraphInner() {
         onConnect={onConnect}
         isValidConnection={isValidConnection}
         fitView
+        // Left-mouse drag on empty canvas = rubber-band select. Middle / right mouse
+        // (button 1 / 2) pans, scroll/pinch zooms. Avoids the xyflow Shift+drag
+        // ambiguity where the pan handler eats the event before selection sees it.
+        selectionOnDrag
+        panOnDrag={[1, 2]}
+        selectionMode={SelectionMode.Partial}
         proOptions={{ hideAttribution: true }}
       >
         <Background gap={18} size={1} color="#2c303a" />
