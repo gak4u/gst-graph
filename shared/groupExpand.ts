@@ -7,11 +7,13 @@
 import type {
   GroupBoundaryPad,
   GroupDef,
+  GroupParameter,
+  IteratorColumn,
+  IteratorRow,
   PipelineDef,
   PipelineGraphNode,
   PipelineNodeData,
   VariableNodeData,
-  VariableListValue,
 } from './types';
 
 export class GroupExpansionError extends Error {
@@ -26,13 +28,18 @@ export class GroupExpansionError extends Error {
 
 type StreamEdge = PipelineDef['edges'][number];
 
-function isListValue(v: unknown): v is VariableListValue {
-  return Array.isArray(v);
+/** The iterator's shape after resolution: a uniform list of rows, plus a schema. A scalar
+ *  `list` iterator is normalized to a single anonymous-column schema (column name '__value'). */
+interface ResolvedIterator {
+  schema: IteratorColumn[];
+  rows: IteratorRow[];
 }
 
-/** Pull the iterator list off the named variable node. Throws GroupExpansionError on
- *  any structural problem so callers can surface it. */
-function resolveIteratorList(def: PipelineDef, group: GroupDef): VariableListValue {
+const SCALAR_LIST_COLUMN = '__value';
+
+/** Pull the iterator off the named variable node and normalize to (schema, rows). Throws
+ *  GroupExpansionError on any structural problem so callers can surface it. */
+function resolveIterator(def: PipelineDef, group: GroupDef): ResolvedIterator {
   const varNode = def.nodes.find((n) => n.id === group.iteratorVarId);
   if (!varNode) {
     throw new GroupExpansionError(
@@ -47,13 +54,66 @@ function resolveIteratorList(def: PipelineDef, group: GroupDef): VariableListVal
     );
   }
   const data = varNode.data as VariableNodeData;
-  if (data.valueKind !== 'list' || !isListValue(data.value)) {
+  if (data.valueKind === 'list') {
+    if (!Array.isArray(data.value)) {
+      throw new GroupExpansionError(
+        `Group "${group.name}" iterator variable "${data.varName}" must hold a list value`,
+        group.id,
+      );
+    }
+    const rows: IteratorRow[] = (data.value as Array<string | number | boolean>).map((v) => ({
+      [SCALAR_LIST_COLUMN]: v,
+    }));
+    return {
+      schema: [{ name: SCALAR_LIST_COLUMN, kind: 'string' }],
+      rows,
+    };
+  }
+  if (data.valueKind === 'record-list') {
+    const schema = data.schema || [];
+    if (schema.length === 0) {
+      throw new GroupExpansionError(
+        `Group "${group.name}" iterator "${data.varName}" has no columns — add at least one`,
+        group.id,
+      );
+    }
+    if (!Array.isArray(data.value)) {
+      throw new GroupExpansionError(
+        `Group "${group.name}" iterator "${data.varName}" must hold a list of rows`,
+        group.id,
+      );
+    }
+    const rows = data.value as IteratorRow[];
+    return { schema, rows };
+  }
+  throw new GroupExpansionError(
+    `Group "${group.name}" iterator "${data.varName}" must be a list or record-list variable`,
+    group.id,
+  );
+}
+
+/** Determine which iterator column drives a given parameter. With one column we auto-pick;
+ *  with multiple columns the parameter must specify `sourceColumn` and it must be in schema. */
+function resolveParameterColumn(
+  group: GroupDef,
+  iter: ResolvedIterator,
+  param: GroupParameter,
+): IteratorColumn {
+  if (iter.schema.length === 1) return iter.schema[0];
+  if (!param.sourceColumn) {
     throw new GroupExpansionError(
-      `Group "${group.name}" iterator variable "${data.varName}" must hold a list value`,
+      `Group "${group.name}" parameter for ${param.propertyKey} needs a column — iterator has multiple`,
       group.id,
     );
   }
-  return data.value;
+  const col = iter.schema.find((c) => c.name === param.sourceColumn);
+  if (!col) {
+    throw new GroupExpansionError(
+      `Group "${group.name}" parameter for ${param.propertyKey} binds to column "${param.sourceColumn}" which is no longer in the iterator schema`,
+      group.id,
+    );
+  }
+  return col;
 }
 
 /** Suffix an instance name with `_i`, preserving uniqueness across iterations. The cloned
@@ -115,9 +175,23 @@ function cloneMember(
   return cloned;
 }
 
-/** Convert a primitive list element to the property-value shape PipelineNodeData expects. */
-function listElementToProperty(v: string | number | boolean): string | number | boolean {
-  return v;
+/** Coerce a cell value into the right scalar type for a property assignment. Lenient: empty /
+ *  null cells become empty string (skipped by the runner anyway). */
+function coerceCellToProperty(
+  raw: string | number | boolean | null | undefined,
+  kind: IteratorColumn['kind'],
+): string | number | boolean {
+  if (raw === null || raw === undefined) return '';
+  if (kind === 'boolean') {
+    if (typeof raw === 'boolean') return raw;
+    return raw === 'true' || raw === '1' || raw === 1;
+  }
+  if (kind === 'number') {
+    if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return String(raw);
 }
 
 interface ExpandedGroupInternals {
@@ -133,11 +207,18 @@ function expandSingleGroup(
   intoNodes: PipelineGraphNode[],
   intoEdges: StreamEdge[],
 ): ExpandedGroupInternals {
-  const list = resolveIteratorList(def, group);
-  const count = list.length;
+  const iter = resolveIterator(def, group);
+  const count = iter.rows.length;
   if (count === 0) {
     return { idMapPerIter: [], count: 0 };
   }
+  // Pre-resolve each parameter to its driving column. This throws early if a multi-column
+  // iterator is missing a `sourceColumn` on any parameter, so we never produce a partial unroll.
+  const paramColumns = group.parameters.map((p) => ({
+    param: p,
+    column: resolveParameterColumn(group, iter, p),
+  }));
+
   const memberSet = new Set(group.memberNodeIds);
   const memberNodes = def.nodes.filter((n) => memberSet.has(n.id));
   const internalEdges = def.edges.filter(
@@ -153,18 +234,14 @@ function expandSingleGroup(
       const cloned = cloneMember(m, i, idMap);
       intoNodes.push(cloned);
     }
-    // Apply parameter substitution: for each parameter row, set the cloned target node's
-    // property to list[i]. The "iterator value" is shared across all parameters in v1 —
-    // every parameter row uses the same iterator. If multiple parameters need independent
-    // lists, that's a future feature (zipped lists or list-of-records).
-    const iterValue = list[i];
-    for (const param of group.parameters) {
+    const row = iter.rows[i] || {};
+    for (const { param, column } of paramColumns) {
       const clonedId = idMap.get(param.targetNodeId);
       if (!clonedId) continue;
       const clonedNode = intoNodes.find((n) => n.id === clonedId);
       if (!clonedNode || clonedNode.type !== 'gstElement') continue;
       const data = clonedNode.data as PipelineNodeData;
-      data.properties[param.propertyKey] = listElementToProperty(iterValue);
+      data.properties[param.propertyKey] = coerceCellToProperty(row[column.name], column.kind);
     }
     // Replicate internal edges
     for (const e of internalEdges) {
@@ -330,8 +407,8 @@ export function diagnoseGroups(def: PipelineDef): string[] {
   const out: string[] = [];
   for (const g of def.groups || []) {
     try {
-      const list = resolveIteratorList(def, g);
-      if (list.length === 0) {
+      const iter = resolveIterator(def, g);
+      if (iter.rows.length === 0) {
         out.push(`Group "${g.name}" has an empty iterator list — no instances will run.`);
       }
       for (const p of g.parameters) {
@@ -339,6 +416,18 @@ export function diagnoseGroups(def: PipelineDef): string[] {
         if (!member) {
           out.push(
             `Group "${g.name}" parameter targets a node that no longer exists.`,
+          );
+          continue;
+        }
+        if (iter.schema.length > 1 && !p.sourceColumn) {
+          out.push(
+            `Group "${g.name}" parameter for ${p.propertyKey} needs a column pick — iterator has multiple.`,
+          );
+          continue;
+        }
+        if (p.sourceColumn && !iter.schema.some((c) => c.name === p.sourceColumn)) {
+          out.push(
+            `Group "${g.name}" parameter for ${p.propertyKey} binds to column "${p.sourceColumn}" which is no longer in the iterator schema.`,
           );
         }
       }

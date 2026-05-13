@@ -1866,6 +1866,43 @@ input[type="radio"] {
   text-decoration: underline;
 }
 
+/* Iterator (record-list) table editor — used in PropertiesPanel and HomeScreen */
+.iter-editor { display: flex; flex-direction: column; }
+.iter-table-wrap, .home-iter-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.iter-table, .home-iter-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.iter-table th, .iter-table td, .home-iter-table th, .home-iter-table td {
+  border: 1px solid var(--border);
+  padding: 2px 4px;
+  vertical-align: middle;
+}
+.iter-table th { background: var(--bg-3); }
+.home-iter-table th { background: var(--bg-3); font-weight: 600; }
+.iter-table input, .iter-table select, .home-iter-table input {
+  width: 100%;
+  min-width: 60px;
+  background: var(--bg-1);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 2px 4px;
+  font-size: 11px;
+}
+.home-iter-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+}
+.home-iter-empty { padding: 4px 0; font-style: italic; }
+
 /* Loopable group container */
 .group-node {
   position: relative;

@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useStore } from '../state/store';
 import { PropertyEditor } from './PropertyEditor';
-import type { GstElementDetail, GstPropertyDef, VariableNodeData } from '@shared/types';
+import type {
+  GstElementDetail,
+  GstPropertyDef,
+  IteratorColumn,
+  IteratorRow,
+  VariableNodeData,
+} from '@shared/types';
 
 function effectivePropValue(
   detail: GstElementDetail,
@@ -291,6 +297,8 @@ export function PropertiesPanel() {
                   useStore.getState().updateVariableValue(node.id, lines);
                 }}
               />
+            ) : vd.valueKind === 'record-list' ? (
+              <IteratorTableEditor variableNodeId={node.id} data={vd} />
             ) : (
               <input
                 value={vd.value == null ? '' : String(vd.value)}
@@ -314,7 +322,8 @@ export function PropertiesPanel() {
               <option value="string">string</option>
               <option value="number">number</option>
               <option value="boolean">boolean</option>
-              <option value="list">list (group iterator)</option>
+              <option value="list">list (single-column iterator)</option>
+              <option value="record-list">record list (multi-column iterator)</option>
             </select>
           </div>
           <div className="prop-row">
@@ -348,9 +357,11 @@ export function PropertiesPanel() {
       );
     }
     const listVars = (pipeline?.nodes || []).filter(
-      (n): n is Extract<typeof n, { type: 'gstVariable' }> =>
-        n.type === 'gstVariable' &&
-        (n.data as VariableNodeData).valueKind === 'list',
+      (n): n is Extract<typeof n, { type: 'gstVariable' }> => {
+        if (n.type !== 'gstVariable') return false;
+        const k = (n.data as VariableNodeData).valueKind;
+        return k === 'list' || k === 'record-list';
+      },
     );
     const memberNodes = group.memberNodeIds
       .map((mid) => pipeline?.nodes.find((n) => n.id === mid))
@@ -359,10 +370,17 @@ export function PropertiesPanel() {
           !!n && n.type === 'gstElement',
       );
     const iteratorVar = listVars.find((v) => v.id === group.iteratorVarId);
+    const iteratorData = iteratorVar ? (iteratorVar.data as VariableNodeData) : null;
     const iteratorLen =
-      iteratorVar && Array.isArray((iteratorVar.data as VariableNodeData).value)
-        ? ((iteratorVar.data as VariableNodeData).value as unknown[]).length
+      iteratorData && Array.isArray(iteratorData.value)
+        ? (iteratorData.value as unknown[]).length
         : 0;
+    const iteratorColumns: IteratorColumn[] =
+      iteratorData?.valueKind === 'record-list'
+        ? iteratorData.schema || []
+        : iteratorData?.valueKind === 'list'
+          ? [{ name: 'value', kind: 'string' }]
+          : [];
 
     return (
       <div className="props">
@@ -434,6 +452,9 @@ export function PropertiesPanel() {
               )}
               {group.parameters.map((p) => {
                 const member = memberNodes.find((m) => m.id === p.targetNodeId);
+                const col =
+                  p.sourceColumn ||
+                  (iteratorColumns.length === 1 ? iteratorColumns[0].name : undefined);
                 return (
                   <div
                     key={`${p.targetNodeId}:${p.propertyKey}`}
@@ -441,6 +462,12 @@ export function PropertiesPanel() {
                   >
                     <code style={{ flex: 1 }}>
                       {member ? member.data.instanceName : '???'}.{p.propertyKey}
+                      {col && (
+                        <span className="muted">
+                          {' '}
+                          ← <code>${col}</code>
+                        </span>
+                      )}
                     </code>
                     <button
                       className="ghost"
@@ -461,6 +488,7 @@ export function PropertiesPanel() {
                 groupId={group.id}
                 memberNodes={memberNodes}
                 existing={group.parameters}
+                iteratorColumns={iteratorColumns}
               />
             </div>
           </div>
@@ -664,17 +692,203 @@ export function PropertiesPanel() {
   );
 }
 
+interface IteratorTableEditorProps {
+  variableNodeId: string;
+  data: VariableNodeData;
+}
+
+function IteratorTableEditor({ variableNodeId, data }: IteratorTableEditorProps) {
+  const addColumn = useStore((s) => s.addIteratorColumn);
+  const removeColumn = useStore((s) => s.removeIteratorColumn);
+  const renameColumn = useStore((s) => s.renameIteratorColumn);
+  const setKind = useStore((s) => s.setIteratorColumnKind);
+  const addRow = useStore((s) => s.addIteratorRow);
+  const removeRow = useStore((s) => s.removeIteratorRow);
+  const setCell = useStore((s) => s.setIteratorCell);
+
+  const schema: IteratorColumn[] = data.schema || [];
+  const rows: IteratorRow[] = Array.isArray(data.value) ? (data.value as IteratorRow[]) : [];
+
+  const [newColName, setNewColName] = useState('');
+  const [newColKind, setNewColKind] = useState<IteratorColumn['kind']>('string');
+
+  function commitColumn() {
+    if (!newColName.trim()) return;
+    addColumn(variableNodeId, newColName, newColKind);
+    setNewColName('');
+  }
+
+  return (
+    <div className="iter-editor">
+      {schema.length === 0 ? (
+        <div className="muted" style={{ marginBottom: 8 }}>
+          No columns yet. Add at least one to define what each iteration row holds.
+        </div>
+      ) : (
+        <div className="iter-table-wrap">
+          <table className="iter-table">
+            <thead>
+              <tr>
+                <th style={{ width: 24 }}>#</th>
+                {schema.map((c) => (
+                  <th key={c.name}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <input
+                        defaultValue={c.name}
+                        onBlur={(e) =>
+                          e.target.value !== c.name &&
+                          renameColumn(variableNodeId, c.name, e.target.value)
+                        }
+                        style={{ fontWeight: 600 }}
+                      />
+                      <select
+                        value={c.kind}
+                        onChange={(e) =>
+                          setKind(variableNodeId, c.name, e.target.value as IteratorColumn['kind'])
+                        }
+                      >
+                        <option value="string">string</option>
+                        <option value="number">number</option>
+                        <option value="boolean">boolean</option>
+                      </select>
+                    </div>
+                  </th>
+                ))}
+                <th style={{ width: 36 }}></th>
+              </tr>
+              <tr>
+                <th></th>
+                {schema.map((c) => (
+                  <th key={`${c.name}-drop`} style={{ textAlign: 'right' }}>
+                    <button
+                      className="ghost"
+                      title={`Remove column ${c.name}`}
+                      onClick={() => removeColumn(variableNodeId, c.name)}
+                    >
+                      ✕
+                    </button>
+                  </th>
+                ))}
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={schema.length + 2} className="muted" style={{ padding: 8 }}>
+                    No rows yet. Click <code>+ add row</code> below.
+                  </td>
+                </tr>
+              )}
+              {rows.map((row, i) => (
+                <tr key={i}>
+                  <td className="muted">{i + 1}</td>
+                  {schema.map((c) => (
+                    <td key={c.name}>
+                      <IteratorCellInput
+                        column={c}
+                        value={row[c.name]}
+                        onChange={(v) => setCell(variableNodeId, i, c.name, v)}
+                      />
+                    </td>
+                  ))}
+                  <td>
+                    <button
+                      className="ghost"
+                      title="Delete row"
+                      onClick={() => removeRow(variableNodeId, i)}
+                    >
+                      ✕
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+        <input
+          placeholder="new column name"
+          value={newColName}
+          onChange={(e) => setNewColName(e.target.value.replace(/[^a-zA-Z0-9_]/g, '_'))}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commitColumn();
+          }}
+          style={{ flex: 1 }}
+        />
+        <select
+          value={newColKind}
+          onChange={(e) => setNewColKind(e.target.value as IteratorColumn['kind'])}
+        >
+          <option value="string">string</option>
+          <option value="number">number</option>
+          <option value="boolean">boolean</option>
+        </select>
+        <button disabled={!newColName.trim()} onClick={commitColumn}>
+          + column
+        </button>
+      </div>
+      <div style={{ marginTop: 6 }}>
+        <button disabled={schema.length === 0} onClick={() => addRow(variableNodeId)}>
+          + add row
+        </button>
+      </div>
+    </div>
+  );
+}
+
+interface IteratorCellInputProps {
+  column: IteratorColumn;
+  value: string | number | boolean | null | undefined;
+  onChange: (v: string | number | boolean | null) => void;
+}
+
+function IteratorCellInput({ column, value, onChange }: IteratorCellInputProps) {
+  if (column.kind === 'boolean') {
+    return (
+      <input
+        type="checkbox"
+        checked={value === true || value === 'true'}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+    );
+  }
+  if (column.kind === 'number') {
+    return (
+      <input
+        type="number"
+        value={value === null || value === undefined ? '' : Number(value)}
+        onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
+      />
+    );
+  }
+  return (
+    <input
+      value={value === null || value === undefined ? '' : String(value)}
+      onChange={(e) => onChange(e.target.value)}
+    />
+  );
+}
+
 interface GroupParameterAdderProps {
   groupId: string;
   memberNodes: Array<Extract<import('@shared/types').PipelineGraphNode, { type: 'gstElement' }>>;
   existing: Array<{ targetNodeId: string; propertyKey: string }>;
+  iteratorColumns: IteratorColumn[];
 }
 
-function GroupParameterAdder({ groupId, memberNodes, existing }: GroupParameterAdderProps) {
+function GroupParameterAdder({
+  groupId,
+  memberNodes,
+  existing,
+  iteratorColumns,
+}: GroupParameterAdderProps) {
   const details = useStore((s) => s.details);
   const addGroupParameter = useStore((s) => s.addGroupParameter);
   const [memberId, setMemberId] = useState('');
   const [propKey, setPropKey] = useState('');
+  const [column, setColumn] = useState('');
 
   const memberDetail = memberNodes.find((m) => m.id === memberId);
   const detail = memberDetail ? details[memberDetail.data.elementName] : null;
@@ -687,21 +901,31 @@ function GroupParameterAdder({ groupId, memberNodes, existing }: GroupParameterA
       !existing.some((x) => x.targetNodeId === memberId && x.propertyKey === p.name),
   );
 
+  const needsColumnPick = iteratorColumns.length > 1;
+
   function add() {
     if (!memberId || !propKey) return;
-    addGroupParameter(groupId, { targetNodeId: memberId, propertyKey: propKey });
+    if (needsColumnPick && !column) return;
+    addGroupParameter(groupId, {
+      targetNodeId: memberId,
+      propertyKey: propKey,
+      // Single-column iterators auto-pick on unroll; we still record the column name
+      // when there's one, so renaming a column later updates the parameter automatically.
+      sourceColumn: column || (iteratorColumns.length === 1 ? iteratorColumns[0].name : undefined),
+    });
     setPropKey('');
+    setColumn('');
   }
 
   return (
-    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+    <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
       <select
         value={memberId}
         onChange={(e) => {
           setMemberId(e.target.value);
           setPropKey('');
         }}
-        style={{ flex: 1 }}
+        style={{ flex: 1, minWidth: 120 }}
       >
         <option value="">- pick member -</option>
         {memberNodes.map((m) => (
@@ -714,7 +938,7 @@ function GroupParameterAdder({ groupId, memberNodes, existing }: GroupParameterA
         value={propKey}
         onChange={(e) => setPropKey(e.target.value)}
         disabled={!memberId}
-        style={{ flex: 1 }}
+        style={{ flex: 1, minWidth: 120 }}
       >
         <option value="">- property -</option>
         {candidateProps.map((p) => (
@@ -723,7 +947,25 @@ function GroupParameterAdder({ groupId, memberNodes, existing }: GroupParameterA
           </option>
         ))}
       </select>
-      <button disabled={!memberId || !propKey} onClick={add}>
+      {needsColumnPick && (
+        <select
+          value={column}
+          onChange={(e) => setColumn(e.target.value)}
+          style={{ flex: 1, minWidth: 100 }}
+          title="Which iterator column drives this property"
+        >
+          <option value="">- column -</option>
+          {iteratorColumns.map((c) => (
+            <option key={c.name} value={c.name}>
+              {c.name} ({c.kind})
+            </option>
+          ))}
+        </select>
+      )}
+      <button
+        disabled={!memberId || !propKey || (needsColumnPick && !column)}
+        onClick={add}
+      >
         + add
       </button>
     </div>

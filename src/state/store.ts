@@ -5,6 +5,8 @@ import type {
   GroupParameter,
   GstElementSummary,
   GstElementDetail,
+  IteratorColumn,
+  IteratorRow,
   PipelineDef,
   PipelineGraphNode,
   PipelineNodeData,
@@ -101,6 +103,28 @@ interface State {
   setGroupIterator: (groupId: string, variableNodeId: string) => void;
   addGroupParameter: (groupId: string, param: GroupParameter) => void;
   removeGroupParameter: (groupId: string, targetNodeId: string, propertyKey: string) => void;
+  // Record-list iterator (variable) editing
+  addIteratorColumn: (variableNodeId: string, name: string, kind: IteratorColumn['kind']) => void;
+  removeIteratorColumn: (variableNodeId: string, name: string) => void;
+  renameIteratorColumn: (variableNodeId: string, oldName: string, newName: string) => void;
+  setIteratorColumnKind: (variableNodeId: string, name: string, kind: IteratorColumn['kind']) => void;
+  addIteratorRow: (variableNodeId: string) => void;
+  addIteratorRowIn: (pipelineId: string, variableNodeId: string) => void;
+  removeIteratorRow: (variableNodeId: string, index: number) => void;
+  removeIteratorRowIn: (pipelineId: string, variableNodeId: string, index: number) => void;
+  setIteratorCell: (
+    variableNodeId: string,
+    rowIndex: number,
+    column: string,
+    value: string | number | boolean | null,
+  ) => void;
+  setIteratorCellIn: (
+    pipelineId: string,
+    variableNodeId: string,
+    rowIndex: number,
+    column: string,
+    value: string | number | boolean | null,
+  ) => void;
 }
 
 function newPipelineDef(name: string): Pipeline {
@@ -855,6 +879,168 @@ export const useStore = create<State>((set, get) => ({
               ),
             },
       );
+    });
+  },
+
+  // ===== Record-list iterator (schema + rows) =====
+  // The schema lists column names + types; rows hold the per-iteration cell values keyed
+  // by column name. Schema-side edits backfill rows so we never end up with a row missing
+  // a column key (which would yield empty strings at unroll time and silent miswiring).
+  addIteratorColumn: (variableNodeId, name, kind) => {
+    const active = get().pipelines.find((p) => p.id === get().activePipelineId);
+    if (!active) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    get().updatePipeline(active.id, (p) => {
+      p.nodes = p.nodes.map((n) => {
+        if (n.id !== variableNodeId || n.type !== 'gstVariable') return n;
+        const d = n.data as VariableNodeData;
+        const schema = d.schema ? [...d.schema] : [];
+        if (schema.some((c) => c.name === trimmed)) return n;
+        schema.push({ name: trimmed, kind });
+        const rows = (Array.isArray(d.value) ? (d.value as IteratorRow[]) : []).map((r) => ({
+          ...r,
+          [trimmed]: kind === 'boolean' ? false : kind === 'number' ? 0 : '',
+        }));
+        return { ...n, data: { ...d, valueKind: 'record-list', schema, value: rows } };
+      });
+    });
+  },
+
+  removeIteratorColumn: (variableNodeId, name) => {
+    const active = get().pipelines.find((p) => p.id === get().activePipelineId);
+    if (!active) return;
+    get().updatePipeline(active.id, (p) => {
+      p.nodes = p.nodes.map((n) => {
+        if (n.id !== variableNodeId || n.type !== 'gstVariable') return n;
+        const d = n.data as VariableNodeData;
+        const schema = (d.schema || []).filter((c) => c.name !== name);
+        const rows = (Array.isArray(d.value) ? (d.value as IteratorRow[]) : []).map((r) => {
+          const next = { ...r };
+          delete next[name];
+          return next;
+        });
+        return { ...n, data: { ...d, schema, value: rows } };
+      });
+      // Any group parameters that referenced this column lose their sourceColumn so the
+      // diagnostic surfaces "binds to column which is no longer in the iterator schema"
+      p.groups = (p.groups || []).map((g) =>
+        g.iteratorVarId !== variableNodeId
+          ? g
+          : {
+              ...g,
+              parameters: g.parameters.map((pr) =>
+                pr.sourceColumn === name ? { ...pr, sourceColumn: undefined } : pr,
+              ),
+            },
+      );
+    });
+  },
+
+  renameIteratorColumn: (variableNodeId, oldName, newName) => {
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === oldName) return;
+    const active = get().pipelines.find((p) => p.id === get().activePipelineId);
+    if (!active) return;
+    get().updatePipeline(active.id, (p) => {
+      p.nodes = p.nodes.map((n) => {
+        if (n.id !== variableNodeId || n.type !== 'gstVariable') return n;
+        const d = n.data as VariableNodeData;
+        const schema = (d.schema || []).map((c) =>
+          c.name === oldName ? { ...c, name: trimmed } : c,
+        );
+        const rows = (Array.isArray(d.value) ? (d.value as IteratorRow[]) : []).map((r) => {
+          if (!(oldName in r)) return r;
+          const next: IteratorRow = { ...r };
+          next[trimmed] = next[oldName];
+          delete next[oldName];
+          return next;
+        });
+        return { ...n, data: { ...d, schema, value: rows } };
+      });
+      p.groups = (p.groups || []).map((g) =>
+        g.iteratorVarId !== variableNodeId
+          ? g
+          : {
+              ...g,
+              parameters: g.parameters.map((pr) =>
+                pr.sourceColumn === oldName ? { ...pr, sourceColumn: trimmed } : pr,
+              ),
+            },
+      );
+    });
+  },
+
+  setIteratorColumnKind: (variableNodeId, name, kind) => {
+    const active = get().pipelines.find((p) => p.id === get().activePipelineId);
+    if (!active) return;
+    get().updatePipeline(active.id, (p) => {
+      p.nodes = p.nodes.map((n) => {
+        if (n.id !== variableNodeId || n.type !== 'gstVariable') return n;
+        const d = n.data as VariableNodeData;
+        const schema = (d.schema || []).map((c) => (c.name === name ? { ...c, kind } : c));
+        return { ...n, data: { ...d, schema } };
+      });
+    });
+  },
+
+  addIteratorRow: (variableNodeId) => {
+    const id = get().activePipelineId;
+    if (!id) return;
+    get().addIteratorRowIn(id, variableNodeId);
+  },
+
+  addIteratorRowIn: (pipelineId, variableNodeId) => {
+    get().updatePipeline(pipelineId, (p) => {
+      p.nodes = p.nodes.map((n) => {
+        if (n.id !== variableNodeId || n.type !== 'gstVariable') return n;
+        const d = n.data as VariableNodeData;
+        const schema = d.schema || [];
+        const blankRow: IteratorRow = {};
+        for (const c of schema) {
+          blankRow[c.name] = c.kind === 'boolean' ? false : c.kind === 'number' ? 0 : '';
+        }
+        const rows = Array.isArray(d.value) ? [...(d.value as IteratorRow[]), blankRow] : [blankRow];
+        return { ...n, data: { ...d, valueKind: 'record-list', value: rows } };
+      });
+    });
+  },
+
+  removeIteratorRow: (variableNodeId, index) => {
+    const id = get().activePipelineId;
+    if (!id) return;
+    get().removeIteratorRowIn(id, variableNodeId, index);
+  },
+
+  removeIteratorRowIn: (pipelineId, variableNodeId, index) => {
+    get().updatePipeline(pipelineId, (p) => {
+      p.nodes = p.nodes.map((n) => {
+        if (n.id !== variableNodeId || n.type !== 'gstVariable') return n;
+        const d = n.data as VariableNodeData;
+        const rows = Array.isArray(d.value) ? [...(d.value as IteratorRow[])] : [];
+        if (index < 0 || index >= rows.length) return n;
+        rows.splice(index, 1);
+        return { ...n, data: { ...d, value: rows } };
+      });
+    });
+  },
+
+  setIteratorCell: (variableNodeId, rowIndex, column, value) => {
+    const id = get().activePipelineId;
+    if (!id) return;
+    get().setIteratorCellIn(id, variableNodeId, rowIndex, column, value);
+  },
+
+  setIteratorCellIn: (pipelineId, variableNodeId, rowIndex, column, value) => {
+    get().updatePipeline(pipelineId, (p) => {
+      p.nodes = p.nodes.map((n) => {
+        if (n.id !== variableNodeId || n.type !== 'gstVariable') return n;
+        const d = n.data as VariableNodeData;
+        const rows = Array.isArray(d.value) ? [...(d.value as IteratorRow[])] : [];
+        if (rowIndex < 0 || rowIndex >= rows.length) return n;
+        rows[rowIndex] = { ...rows[rowIndex], [column]: value };
+        return { ...n, data: { ...d, value: rows } };
+      });
     });
   },
 }));

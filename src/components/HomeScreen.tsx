@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useStore } from '../state/store';
 import { NewPipelineModal } from './NewPipelineModal';
 import type { Pipeline } from '../state/store';
-import type { VariableNodeData } from '@shared/types';
+import type { IteratorColumn, IteratorRow, VariableNodeData } from '@shared/types';
 
 function VariableTileRow({
   pipelineId,
@@ -20,6 +20,18 @@ function VariableTileRow({
   const handleChange = (val: string | number | boolean | null) => {
     updateVariableValueIn(pipelineId, nodeId, val);
   };
+
+  if (data.valueKind === 'record-list') {
+    return (
+      <IteratorTileTable
+        pipelineId={pipelineId}
+        nodeId={nodeId}
+        data={data}
+        refCount={refCount}
+        displayLabel={displayLabel}
+      />
+    );
+  }
 
   return (
     <div className="home-var-row">
@@ -62,6 +74,124 @@ function VariableTileRow({
           onChange={(e) => handleChange(e.target.value)}
         />
       )}
+    </div>
+  );
+}
+
+function IteratorTileTable({
+  pipelineId,
+  nodeId,
+  data,
+  refCount,
+  displayLabel,
+}: {
+  pipelineId: string;
+  nodeId: string;
+  data: VariableNodeData;
+  refCount: number;
+  displayLabel: string;
+}) {
+  const setCell = useStore((s) => s.setIteratorCellIn);
+  const addRow = useStore((s) => s.addIteratorRowIn);
+  const removeRow = useStore((s) => s.removeIteratorRowIn);
+  const schema: IteratorColumn[] = data.schema || [];
+  const rows: IteratorRow[] = Array.isArray(data.value) ? (data.value as IteratorRow[]) : [];
+
+  return (
+    <div className="home-iter-row">
+      <div className="home-var-meta">
+        <span className="home-var-label">{displayLabel}</span>
+        <span className="home-var-name">${data.varName}</span>
+        <span className="home-var-bindings">
+          {rows.length} row{rows.length === 1 ? '' : 's'} ·{' '}
+          {refCount === 0 ? 'unbound' : `${refCount} group binding${refCount === 1 ? '' : 's'}`}
+        </span>
+      </div>
+      {schema.length === 0 ? (
+        <div className="muted home-iter-empty">
+          No columns yet — open in editor to define this iterator's schema.
+        </div>
+      ) : (
+        <div className="home-iter-table-wrap">
+          <table className="home-iter-table">
+            <thead>
+              <tr>
+                <th style={{ width: 22 }}>#</th>
+                {schema.map((c) => (
+                  <th key={c.name} title={`${c.name} (${c.kind})`}>
+                    {c.name}
+                  </th>
+                ))}
+                <th style={{ width: 28 }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={schema.length + 2} className="muted" style={{ padding: 4 }}>
+                    No iterations.
+                  </td>
+                </tr>
+              )}
+              {rows.map((row, i) => (
+                <tr key={i}>
+                  <td className="muted">{i + 1}</td>
+                  {schema.map((c) => {
+                    const v = row[c.name];
+                    return (
+                      <td key={c.name}>
+                        {c.kind === 'boolean' ? (
+                          <input
+                            type="checkbox"
+                            checked={v === true || v === 'true'}
+                            onChange={(e) =>
+                              setCell(pipelineId, nodeId, i, c.name, e.target.checked)
+                            }
+                          />
+                        ) : c.kind === 'number' ? (
+                          <input
+                            type="number"
+                            value={v === null || v === undefined ? '' : Number(v)}
+                            onChange={(e) =>
+                              setCell(
+                                pipelineId,
+                                nodeId,
+                                i,
+                                c.name,
+                                e.target.value === '' ? null : Number(e.target.value),
+                              )
+                            }
+                          />
+                        ) : (
+                          <input
+                            type="text"
+                            value={v === null || v === undefined ? '' : String(v)}
+                            onChange={(e) => setCell(pipelineId, nodeId, i, c.name, e.target.value)}
+                          />
+                        )}
+                      </td>
+                    );
+                  })}
+                  <td>
+                    <button
+                      className="ghost"
+                      title="Delete row"
+                      onClick={() => removeRow(pipelineId, nodeId, i)}
+                    >
+                      ✕
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div style={{ marginTop: 4 }}>
+        <button disabled={schema.length === 0} onClick={() => addRow(pipelineId, nodeId)}>
+          + add row
+        </button>
+      </div>
     </div>
   );
 }

@@ -84,17 +84,33 @@ export interface PipelineNodeData {
   [k: string]: unknown;
 }
 
-export type VariableValueKind = 'string' | 'number' | 'boolean' | 'list';
+export type VariableValueKind = 'string' | 'number' | 'boolean' | 'list' | 'record-list';
 
 // A list-typed variable holds an array of primitives. Items must be all strings, all numbers,
 // or all booleans (we don't support mixed-type lists). Used as the iterator for a GroupDef.
 export type VariableListValue = string[] | number[] | boolean[];
 
+/** One column of a record-list iterator. */
+export interface IteratorColumn {
+  /** Identifier used as the column name in rows. Also shown in the group's parameter picker. */
+  name: string;
+  /** Scalar kind for cells in this column. */
+  kind: 'string' | 'number' | 'boolean';
+}
+
+/** A row in a record-list iterator: cell value keyed by column name. */
+export type IteratorRow = Record<string, string | number | boolean | null>;
+
 export interface VariableNodeData {
   varName: string;
   label?: string;
   valueKind: VariableValueKind;
-  value: string | number | boolean | VariableListValue | null;
+  /** For 'string' / 'number' / 'boolean': the scalar value.
+   *  For 'list':         an array of primitives — single anonymous column iterator.
+   *  For 'record-list':  an array of IteratorRow (one per iteration); schema lives in `schema`. */
+  value: string | number | boolean | VariableListValue | IteratorRow[] | null;
+  /** Column definitions for 'record-list' kind. Ignored for other kinds. */
+  schema?: IteratorColumn[];
   description?: string;
   hidden?: boolean;
   [k: string]: unknown;
@@ -159,13 +175,20 @@ export type PipelineGraphNode =
     };
 
 /** A property on a member node whose value varies per iteration of a loop group.
- *  At unroll time, the i-th clone's `data.properties[propertyKey]` is set to the
- *  i-th element of the iterator variable's list value. */
+ *  At unroll time, the i-th clone's `data.properties[propertyKey]` is set from the
+ *  iterator's i-th row.
+ *  - For a scalar 'list' iterator the i-th element is used directly.
+ *  - For a 'record-list' iterator with one column, that column's i-th cell is used
+ *    automatically (no `sourceColumn` needed).
+ *  - For a multi-column 'record-list' iterator, `sourceColumn` picks which column
+ *    drives this property; expansion errors out if it's missing or unknown. */
 export interface GroupParameter {
   /** Member node whose property is varied. */
   targetNodeId: string;
   /** Property name on that node (e.g. "location"). */
   propertyKey: string;
+  /** Column name in the iterator's schema; only meaningful for multi-column iterators. */
+  sourceColumn?: string;
 }
 
 /** A pad on the group container that forwards to a member node's pad on unroll.

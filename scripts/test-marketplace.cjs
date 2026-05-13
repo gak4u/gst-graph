@@ -618,6 +618,191 @@ function buildFanoutDef(locations) {
   assert(boundary.length === 1, '1-iter: one boundary clone edge');
 }
 
+// ---- record-list iterator ----
+{
+  const groupId = 'g_records';
+  const def = {
+    id: 'pl_records', name: 'Records',
+    nodes: [
+      el('vt', 'tee', 'vtee'),
+      // Record-list iterator with two columns: loc (string), bitrate (number)
+      {
+        id: 'var_iter', type: 'gstVariable', position: { x: 0, y: 0 },
+        data: {
+          varName: 'targets',
+          valueKind: 'record-list',
+          schema: [
+            { name: 'loc', kind: 'string' },
+            { name: 'bitrate', kind: 'number' },
+          ],
+          value: [
+            { loc: 'rtmp://a', bitrate: 3000 },
+            { loc: 'rtmp://b', bitrate: 5000 },
+          ],
+        },
+      },
+      el('flv', 'flvmux', 'flvmux1', { streamable: true }),
+      el('q', 'queue', 'queue1'),
+      el('rtmp', 'rtmp2sink', 'rtmp2sink1', { location: '', bitrate: 0 }),
+      { id: groupId, type: 'gstElement', position: { x: 0, y: 0 },
+        data: { elementName: '__group__', instanceName: groupId, properties: {} } },
+    ],
+    edges: [
+      {
+        id: 'eb', source: 'vt', target: groupId,
+        sourceHandle: 'src:src_%u', targetHandle: 'sink:video_in',
+        data: { edgeKind: 'stream' },
+      },
+      mkStreamEdge('e_flv_q', 'flv', 'q'),
+      mkStreamEdge('e_q_rtmp', 'q', 'rtmp'),
+    ],
+    groups: [
+      {
+        id: groupId, name: 'RTMP Out',
+        memberNodeIds: ['flv', 'q', 'rtmp'],
+        iteratorVarId: 'var_iter',
+        parameters: [
+          { targetNodeId: 'rtmp', propertyKey: 'location', sourceColumn: 'loc' },
+          { targetNodeId: 'rtmp', propertyKey: 'bitrate', sourceColumn: 'bitrate' },
+        ],
+        boundary: [
+          { handleId: 'sink:video_in', direction: 'sink',
+            memberNodeId: 'flv', memberPadName: 'video' },
+        ],
+      },
+    ],
+  };
+  const expanded = expandGroups(def);
+  const rtmpClones = expanded.nodes.filter(
+    (n) => n.type === 'gstElement' && n.data.elementName === 'rtmp2sink',
+  );
+  assert(rtmpClones.length === 2, `record-list: 2 rtmp clones (got ${rtmpClones.length})`);
+  const locations = rtmpClones.map((n) => n.data.properties.location).sort();
+  assert(
+    JSON.stringify(locations) === JSON.stringify(['rtmp://a', 'rtmp://b']),
+    'record-list: location column drove location property',
+  );
+  const bitrates = rtmpClones.map((n) => n.data.properties.bitrate).sort();
+  assert(
+    JSON.stringify(bitrates) === JSON.stringify([3000, 5000]),
+    'record-list: bitrate column drove bitrate property (number-typed)',
+  );
+}
+
+// ---- record-list with single column auto-picks (no sourceColumn needed) ----
+{
+  const groupId = 'g_auto';
+  const def = {
+    id: 'pl_auto', name: 'AutoPick',
+    nodes: [
+      el('vt', 'tee', 'vtee'),
+      {
+        id: 'var_iter', type: 'gstVariable', position: { x: 0, y: 0 },
+        data: {
+          varName: 'targets', valueKind: 'record-list',
+          schema: [{ name: 'loc', kind: 'string' }],
+          value: [{ loc: 'rtmp://only' }],
+        },
+      },
+      el('flv', 'flvmux', 'flvmux1'),
+      el('rtmp', 'rtmp2sink', 'rtmp2sink1'),
+      { id: groupId, type: 'gstElement', position: { x: 0, y: 0 },
+        data: { elementName: '__group__', instanceName: groupId, properties: {} } },
+    ],
+    edges: [
+      mkStreamEdge('e_flv_rtmp', 'flv', 'rtmp'),
+      { id: 'eb', source: 'vt', target: groupId,
+        sourceHandle: 'src:src_%u', targetHandle: 'sink:v',
+        data: { edgeKind: 'stream' } },
+    ],
+    groups: [
+      {
+        id: groupId, name: 'g',
+        memberNodeIds: ['flv', 'rtmp'],
+        iteratorVarId: 'var_iter',
+        // No sourceColumn — should auto-pick the only column 'loc'
+        parameters: [{ targetNodeId: 'rtmp', propertyKey: 'location' }],
+        boundary: [{ handleId: 'sink:v', direction: 'sink',
+          memberNodeId: 'flv', memberPadName: 'video' }],
+      },
+    ],
+  };
+  const expanded = expandGroups(def);
+  const rtmpClone = expanded.nodes.find(
+    (n) => n.type === 'gstElement' && n.data.elementName === 'rtmp2sink',
+  );
+  assert(
+    !!rtmpClone && rtmpClone.data.properties.location === 'rtmp://only',
+    'record-list 1-col: auto-picked the only column',
+  );
+}
+
+// ---- record-list multi-column without sourceColumn ⇒ diagnoseGroups + throws ----
+{
+  const groupId = 'g_amb';
+  const def = {
+    id: 'pl_amb', name: 'Amb',
+    nodes: [
+      el('vt', 'tee', 'vt'),
+      {
+        id: 'var_iter', type: 'gstVariable', position: { x: 0, y: 0 },
+        data: {
+          varName: 't', valueKind: 'record-list',
+          schema: [
+            { name: 'a', kind: 'string' },
+            { name: 'b', kind: 'string' },
+          ],
+          value: [{ a: 'x', b: 'y' }],
+        },
+      },
+      el('flv', 'flvmux', 'flv'),
+      el('rtmp', 'rtmp2sink', 'rtmp'),
+      { id: groupId, type: 'gstElement', position: { x: 0, y: 0 },
+        data: { elementName: '__group__', instanceName: groupId, properties: {} } },
+    ],
+    edges: [mkStreamEdge('e_fr', 'flv', 'rtmp')],
+    groups: [{
+      id: groupId, name: 'g',
+      memberNodeIds: ['flv', 'rtmp'], iteratorVarId: 'var_iter',
+      parameters: [{ targetNodeId: 'rtmp', propertyKey: 'location' }],
+      boundary: [],
+    }],
+  };
+  let threw = null;
+  try { expandGroups(def); } catch (e) { threw = e; }
+  assert(threw instanceof GroupExpansionError, 'multi-col + no sourceColumn: throws');
+  const diag = diagnoseGroups(def);
+  assert(
+    diag.some((m) => /column pick|needs a column/.test(m)),
+    'multi-col + no sourceColumn: diagnoseGroups surfaces the issue',
+  );
+}
+
+// ---- empty schema rejected ----
+{
+  const groupId = 'g_empty';
+  const def = {
+    id: 'pl_es', name: 'es',
+    nodes: [
+      {
+        id: 'var_iter', type: 'gstVariable', position: { x: 0, y: 0 },
+        data: { varName: 't', valueKind: 'record-list', schema: [], value: [] },
+      },
+      el('flv', 'flvmux', 'flv'),
+      { id: groupId, type: 'gstElement', position: { x: 0, y: 0 },
+        data: { elementName: '__group__', instanceName: groupId, properties: {} } },
+    ],
+    edges: [],
+    groups: [{
+      id: groupId, name: 'g', memberNodeIds: ['flv'], iteratorVarId: 'var_iter',
+      parameters: [], boundary: [],
+    }],
+  };
+  let threw = null;
+  try { expandGroups(def); } catch (e) { threw = e; }
+  assert(threw instanceof GroupExpansionError, 'empty schema: throws');
+}
+
 // No groups: pass-through (deep copy semantics not required, but groups[] must be empty)
 {
   const def = {
