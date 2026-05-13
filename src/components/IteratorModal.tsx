@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useStore } from '../state/store';
 import type {
   IteratorColumn,
@@ -41,8 +42,13 @@ export function IteratorModal({ pipelineId, variableNodeId, onClose }: IteratorM
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  // Render through a portal to document.body. xyflow node containers apply a CSS
+  // `transform` to position each node, which creates a new containing block for any
+  // `position: fixed` descendant. Without the portal, our overlay would be sized to
+  // the variable node's transformed bounding box (and clipped to the canvas viewport),
+  // not to the page viewport.
   if (!data) {
-    return (
+    return createPortal(
       <div className="modal-overlay" onClick={onClose}>
         <div className="modal" onClick={(e) => e.stopPropagation()}>
           <div className="modal-head">
@@ -51,13 +57,14 @@ export function IteratorModal({ pipelineId, variableNodeId, onClose }: IteratorM
           </div>
           <div className="modal-body">Variable not found.</div>
         </div>
-      </div>
+      </div>,
+      document.body,
     );
   }
 
   // If the user opened this modal on a non-record-list variable, offer one-click conversion.
   if (data.valueKind !== 'record-list') {
-    return (
+    return createPortal(
       <div className="modal-overlay" onClick={onClose}>
         <div className="modal" onClick={(e) => e.stopPropagation()}>
           <div className="modal-head">
@@ -79,7 +86,8 @@ export function IteratorModal({ pipelineId, variableNodeId, onClose }: IteratorM
             </button>
           </div>
         </div>
-      </div>
+      </div>,
+      document.body,
     );
   }
 
@@ -92,7 +100,7 @@ export function IteratorModal({ pipelineId, variableNodeId, onClose }: IteratorM
     setNewColName('');
   }
 
-  return (
+  return createPortal(
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal iterator-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
@@ -269,6 +277,7 @@ export function IteratorModal({ pipelineId, variableNodeId, onClose }: IteratorM
           <button className="primary" onClick={onClose}>Done</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
