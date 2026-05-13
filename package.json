@@ -1,8 +1,13 @@
 {
   "name": "gst-graph",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "GStreamer pipeline graph editor",
+  "author": {
+    "name": "gak4u",
+    "email": "gak4u@users.noreply.github.com"
+  },
+  "homepage": "https://github.com/gak4u/gst-graph",
   "main": "dist-electron/electron/main.js",
   "scripts": {
     "dev:renderer": "vite",
@@ -20,7 +25,80 @@
     "screenshots": "npm run build && node scripts/take-screenshots.cjs",
     "test:marketplace": "node scripts/test-marketplace.cjs",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
-    "lint": "eslint . --ext .ts,.tsx"
+    "lint": "eslint . --ext .ts,.tsx",
+    "dist:mac": "npm run build && electron-builder --mac --arm64 --x64",
+    "dist:linux": "npm run build && electron-builder --linux AppImage deb",
+    "dist:win": "npm run build && electron-builder --win nsis"
+  },
+  "build": {
+    "appId": "dev.gak4u.gst-graph",
+    "productName": "GStreamer Graph",
+    "copyright": "Copyright © 2026 gak4u — PolyForm Noncommercial License 1.0.0",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist-electron/**/*",
+      "dist/**/*",
+      "package.json",
+      "!**/*.map",
+      "!**/*.ts"
+    ],
+    "extraMetadata": {
+      "main": "dist-electron/electron/main.js"
+    },
+    "asar": true,
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "identity": null,
+      "darkModeSupport": true,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "${productName} ${version}",
+      "writeUpdateInfo": false
+    },
+    "linux": {
+      "category": "Development",
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "synopsis": "GStreamer pipeline graph editor",
+      "description": "Visual editor for GStreamer pipelines with a marketplace of installable packages.",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "publish": null
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -40,6 +118,7 @@
     "concurrently": "^9.0.1",
     "cross-env": "^7.0.3",
     "electron": "^32.1.2",
+    "electron-builder": "^25.1.8",
     "eslint": "^8.57.1",
     "eslint-plugin-react-hooks": "^4.6.2",
     "typescript": "^5.6.2",
