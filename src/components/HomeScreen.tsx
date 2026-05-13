@@ -33,6 +33,30 @@ function VariableTileRow({
     );
   }
 
+  if (data.valueKind === 'kv') {
+    return (
+      <KvTileEditor
+        pipelineId={pipelineId}
+        nodeId={nodeId}
+        data={data}
+        refCount={refCount}
+        displayLabel={displayLabel}
+      />
+    );
+  }
+
+  if (data.valueKind === 'list') {
+    return (
+      <ListTileEditor
+        pipelineId={pipelineId}
+        nodeId={nodeId}
+        data={data}
+        refCount={refCount}
+        displayLabel={displayLabel}
+      />
+    );
+  }
+
   return (
     <div className="home-var-row">
       <div className="home-var-meta">
@@ -74,6 +98,170 @@ function VariableTileRow({
           onChange={(e) => handleChange(e.target.value)}
         />
       )}
+    </div>
+  );
+}
+
+/** Inline kv editor on the Home pipeline tile — same key=value table as the modal but
+ *  compact. Edits flow through the per-pipeline setKvEntryIn / removeKvEntryIn actions
+ *  so the right pipeline is mutated regardless of which one is active. */
+function KvTileEditor({
+  pipelineId,
+  nodeId,
+  data,
+  refCount,
+  displayLabel,
+}: {
+  pipelineId: string;
+  nodeId: string;
+  data: VariableNodeData;
+  refCount: number;
+  displayLabel: string;
+}) {
+  const setEntry = useStore((s) => s.setKvEntryIn);
+  const removeEntry = useStore((s) => s.removeKvEntryIn);
+  const renameKey = useStore((s) => s.renameKvKey);
+  const map =
+    data.value && typeof data.value === 'object' && !Array.isArray(data.value)
+      ? (data.value as Record<string, string>)
+      : {};
+  const keys = Object.keys(map);
+  const [draftKey, setDraftKey] = useState('');
+  const [draftValue, setDraftValue] = useState('');
+
+  function commit() {
+    if (!draftKey.trim()) return;
+    setEntry(pipelineId, nodeId, draftKey.trim(), draftValue);
+    setDraftKey('');
+    setDraftValue('');
+  }
+
+  return (
+    <div className="home-iter-row">
+      <div className="home-var-meta">
+        <span className="home-var-label">{displayLabel}</span>
+        <span className="home-var-name">${data.varName}</span>
+        <span className="home-var-bindings">
+          {keys.length} entr{keys.length === 1 ? 'y' : 'ies'} ·{' '}
+          {refCount === 0 ? 'unbound' : `${refCount} reference${refCount === 1 ? '' : 's'}`}
+        </span>
+      </div>
+      {keys.length === 0 ? (
+        <div className="muted home-iter-empty">
+          No entries yet. Add a key + value below.
+        </div>
+      ) : (
+        <div className="home-iter-table-wrap">
+          <table className="home-iter-table">
+            <thead>
+              <tr>
+                <th style={{ width: '30%' }}>key</th>
+                <th>value</th>
+                <th style={{ width: 28 }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {keys.map((k) => (
+                <tr key={k}>
+                  <td>
+                    <input
+                      defaultValue={k}
+                      onBlur={(e) =>
+                        e.target.value !== k && renameKey(nodeId, k, e.target.value)
+                      }
+                    />
+                  </td>
+                  <td>
+                    <input
+                      value={map[k]}
+                      onChange={(e) => setEntry(pipelineId, nodeId, k, e.target.value)}
+                    />
+                  </td>
+                  <td>
+                    <button
+                      className="ghost"
+                      title={`Remove "${k}"`}
+                      onClick={() => removeEntry(pipelineId, nodeId, k)}
+                    >
+                      ✕
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
+        <input
+          placeholder="new key"
+          value={draftKey}
+          onChange={(e) => setDraftKey(e.target.value.replace(/[^a-zA-Z0-9_]/g, '_'))}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commit();
+          }}
+          style={{ width: '30%', minWidth: 100 }}
+        />
+        <input
+          placeholder="value"
+          value={draftValue}
+          onChange={(e) => setDraftValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commit();
+          }}
+          style={{ flex: 1, minWidth: 160 }}
+        />
+        <button disabled={!draftKey.trim()} onClick={commit}>
+          + entry
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Inline editor for the scalar `list` variable kind (single-column iterator). Renders
+ *  the items as a textarea (one per line) — same shape as the Properties Panel. */
+function ListTileEditor({
+  pipelineId,
+  nodeId,
+  data,
+  refCount,
+  displayLabel,
+}: {
+  pipelineId: string;
+  nodeId: string;
+  data: VariableNodeData;
+  refCount: number;
+  displayLabel: string;
+}) {
+  const updateVariableValueIn = useStore((s) => s.updateVariableValueIn);
+  const items: Array<string | number | boolean> = Array.isArray(data.value)
+    ? (data.value as Array<string | number | boolean>)
+    : [];
+
+  return (
+    <div className="home-iter-row">
+      <div className="home-var-meta">
+        <span className="home-var-label">{displayLabel}</span>
+        <span className="home-var-name">${data.varName}</span>
+        <span className="home-var-bindings">
+          {items.length} item{items.length === 1 ? '' : 's'} ·{' '}
+          {refCount === 0 ? 'unbound' : `${refCount} reference${refCount === 1 ? '' : 's'}`}
+        </span>
+      </div>
+      <textarea
+        rows={Math.max(3, Math.min(items.length + 1, 6))}
+        placeholder={'One value per line'}
+        value={items.map((v) => String(v)).join('\n')}
+        onChange={(e) => {
+          const lines = e.target.value
+            .split('\n')
+            .map((l) => l.trim())
+            .filter((l) => l.length > 0);
+          updateVariableValueIn(pipelineId, nodeId, lines);
+        }}
+        style={{ width: '100%', fontFamily: 'monospace', fontSize: 11 }}
+      />
     </div>
   );
 }
