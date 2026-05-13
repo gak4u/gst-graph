@@ -14,16 +14,34 @@ import {
 } from './data';
 import {
   addElementNode,
+  addGroupParameter,
+  addIteratorColumn,
+  addIteratorRow,
   addTransformNode,
   addVariableNode,
   bindValueToProperty,
+  createGroup,
   linkElements,
   newPipelineDef,
   pipelineSummary,
+  removeGroupParameter,
+  removeIteratorColumn,
+  removeIteratorRow,
+  removeKvEntry,
   removeNode,
+  renameGroup,
+  renameIteratorColumn,
+  renameKvKey,
   setElementProperty,
+  setGroupIterator,
+  setGroupParameterTemplate,
+  setIteratorCell,
+  setIteratorColumnKind,
+  setKvEntry,
   setTransformExpression,
   setVariableValue,
+  setVariableValueGeneric,
+  ungroupGroup,
   wireTransformInput,
 } from './builder';
 import { getRunStatus, startPipeline, stopPipeline } from './runner';
@@ -566,6 +584,567 @@ const tools: ToolDef[] = [
       });
       if (!result) return err(`Pipeline ${pipelineId} not found`);
       return ok({ edgeId });
+    },
+  }),
+
+  // ===========================================================================
+  // Loop groups, record-list iterators, kv variables
+  // ===========================================================================
+  defineTool({
+    name: 'gst_create_group',
+    description:
+      'Group two or more existing nodes into a loop group. The container becomes a single canvas node; member nodes are hidden until ungrouped. Boundary handles are auto-synthesized from edges crossing the member set. Returns the new groupId + boundary spec.',
+    schema: z.object({
+      pipelineId: z.string(),
+      memberNodeIds: z.array(z.string()).min(2),
+      name: z.string().optional(),
+      iteratorVarId: z.string().optional(),
+      position: positionSchema,
+    }),
+    inputSchema: jsonObject(
+      {
+        pipelineId: jsonStr(),
+        memberNodeIds: {
+          type: 'array',
+          items: jsonStr(),
+          minItems: 2,
+          description: 'IDs of nodes to wrap into the group prototype',
+        },
+        name: jsonStr('Display name for the group; defaults to "Loop"'),
+        iteratorVarId: jsonStr('Node id of a list / record-list variable to drive iteration count'),
+        position: positionJson,
+      },
+      ['pipelineId', 'memberNodeIds'],
+    ),
+    handler: async ({ pipelineId, memberNodeIds, name, iteratorVarId, position }) => {
+      type Outcome = { groupId: string; boundary: unknown } | { error: string } | null;
+      const box: { v: Outcome } = { v: null };
+      const result = updatePipelineFile(pipelineId, (p) => {
+        box.v = createGroup(p, { memberNodeIds, name, iteratorVarId, position }) as Outcome;
+      });
+      if (!result) return err(`Pipeline ${pipelineId} not found`);
+      const outcome = box.v;
+      if (!outcome) return err('createGroup returned no outcome');
+      if ('error' in outcome) return err(outcome.error);
+      return ok(outcome);
+    },
+  }),
+
+  defineTool({
+    name: 'gst_ungroup',
+    description:
+      'Inverse of gst_create_group — drop the container, restore members and their original edges. Saved disk state of the members is unchanged.',
+    schema: z.object({ pipelineId: z.string(), groupId: z.string() }),
+    inputSchema: jsonObject(
+      { pipelineId: jsonStr(), groupId: jsonStr() },
+      ['pipelineId', 'groupId'],
+    ),
+    handler: async ({ pipelineId, groupId }) => {
+      let ok2 = false;
+      const result = updatePipelineFile(pipelineId, (p) => {
+        ok2 = ungroupGroup(p, groupId);
+      });
+      if (!result) return err(`Pipeline ${pipelineId} not found`);
+      if (!ok2) return err(`Group ${groupId} not found`);
+      return ok({ groupId });
+    },
+  }),
+
+  defineTool({
+    name: 'gst_rename_group',
+    description: 'Rename a loop group (display name).',
+    schema: z.object({ pipelineId: z.string(), groupId: z.string(), name: z.string() }),
+    inputSchema: jsonObject(
+      { pipelineId: jsonStr(), groupId: jsonStr(), name: jsonStr() },
+      ['pipelineId', 'groupId', 'name'],
+    ),
+    handler: async ({ pipelineId, groupId, name }) => {
+      let ok2 = false;
+      const result = updatePipelineFile(pipelineId, (p) => {
+        ok2 = renameGroup(p, groupId, name);
+      });
+      if (!result) return err(`Pipeline ${pipelineId} not found`);
+      if (!ok2) return err(`Group ${groupId} not found`);
+      return ok({ groupId, name });
+    },
+  }),
+
+  defineTool({
+    name: 'gst_set_group_iterator',
+    description:
+      'Bind a list- or record-list-kind variable to a loop group as its iterator. The iterator must NOT be a member of the group. Pass an empty string to unbind.',
+    schema: z.object({
+      pipelineId: z.string(),
+      groupId: z.string(),
+      iteratorVarId: z.string(),
+    }),
+    inputSchema: jsonObject(
+      { pipelineId: jsonStr(), groupId: jsonStr(), iteratorVarId: jsonStr() },
+      ['pipelineId', 'groupId', 'iteratorVarId'],
+    ),
+    handler: async ({ pipelineId, groupId, iteratorVarId }) => {
+      type Outcome = boolean | { error: string };
+      const box: { v: Outcome } = { v: false };
+      const result = updatePipelineFile(pipelineId, (p) => {
+        box.v = setGroupIterator(p, groupId, iteratorVarId);
+      });
+      if (!result) return err(`Pipeline ${pipelineId} not found`);
+      const outcome = box.v;
+      if (typeof outcome === 'object' && 'error' in outcome) return err(outcome.error);
+      if (!outcome) return err(`Group ${groupId} not found`);
+      return ok({ groupId, iteratorVarId });
+    },
+  }),
+
+  defineTool({
+    name: 'gst_add_group_parameter',
+    description:
+      'Add a per-iteration property binding to a group. Either bind to an iterator column (sourceColumn) or to a template string with ${col} placeholders. The target node must be a group member.',
+    schema: z.object({
+      pipelineId: z.string(),
+      groupId: z.string(),
+      targetNodeId: z.string(),
+      propertyKey: z.string(),
+      sourceColumn: z.string().optional(),
+      template: z.string().optional(),
+    }),
+    inputSchema: jsonObject(
+      {
+        pipelineId: jsonStr(),
+        groupId: jsonStr(),
+        targetNodeId: jsonStr('Member node whose property is varied per iteration'),
+        propertyKey: jsonStr('Property name on the target element'),
+        sourceColumn: jsonStr(
+          'Iterator column name. Auto-picked when iterator has a single column; required for multi-column iterators unless `template` is set.',
+        ),
+        template: jsonStr(
+          'Template string with ${col} placeholders, e.g. "${endpoint}${key}". When set, overrides sourceColumn.',
+        ),
+      },
+      ['pipelineId', 'groupId', 'targetNodeId', 'propertyKey'],
+    ),
+    handler: async ({ pipelineId, groupId, targetNodeId, propertyKey, sourceColumn, template }) => {
+      let ok2 = false;
+      const result = updatePipelineFile(pipelineId, (p) => {
+        ok2 = addGroupParameter(p, groupId, { targetNodeId, propertyKey, sourceColumn, template });
+      });
+      if (!result) return err(`Pipeline ${pipelineId} not found`);
+      if (!ok2) return err(`Group ${groupId} not found`);
+      return ok({ groupId, targetNodeId, propertyKey, sourceColumn, template });
+    },
+  }),
+
+  defineTool({
+    name: 'gst_remove_group_parameter',
+    description: 'Remove a parameter binding from a group.',
+    schema: z.object({
+      pipelineId: z.string(),
+      groupId: z.string(),
+      targetNodeId: z.string(),
+      propertyKey: z.string(),
+    }),
+    inputSchema: jsonObject(
+      {
+        pipelineId: jsonStr(),
+        groupId: jsonStr(),
+        targetNodeId: jsonStr(),
+        propertyKey: jsonStr(),
+      },
+      ['pipelineId', 'groupId', 'targetNodeId', 'propertyKey'],
+    ),
+    handler: async ({ pipelineId, groupId, targetNodeId, propertyKey }) => {
+      let ok2 = false;
+      const result = updatePipelineFile(pipelineId, (p) => {
+        ok2 = removeGroupParameter(p, groupId, targetNodeId, propertyKey);
+      });
+      if (!result) return err(`Pipeline ${pipelineId} not found`);
+      if (!ok2) return err(`Group ${groupId} not found`);
+      return ok({ groupId, targetNodeId, propertyKey });
+    },
+  }),
+
+  defineTool({
+    name: 'gst_set_group_parameter_template',
+    description:
+      'Set (or clear) the ${col}-interpolated template for an existing group parameter. Pass an empty string to clear and fall back to sourceColumn binding.',
+    schema: z.object({
+      pipelineId: z.string(),
+      groupId: z.string(),
+      targetNodeId: z.string(),
+      propertyKey: z.string(),
+      template: z.string(),
+    }),
+    inputSchema: jsonObject(
+      {
+        pipelineId: jsonStr(),
+        groupId: jsonStr(),
+        targetNodeId: jsonStr(),
+        propertyKey: jsonStr(),
+        template: jsonStr(),
+      },
+      ['pipelineId', 'groupId', 'targetNodeId', 'propertyKey', 'template'],
+    ),
+    handler: async ({ pipelineId, groupId, targetNodeId, propertyKey, template }) => {
+      let ok2 = false;
+      const result = updatePipelineFile(pipelineId, (p) => {
+        ok2 = setGroupParameterTemplate(
+          p,
+          groupId,
+          targetNodeId,
+          propertyKey,
+          template || undefined,
+        );
+      });
+      if (!result) return err(`Pipeline ${pipelineId} not found`);
+      if (!ok2) return err(`Group ${groupId} not found`);
+      return ok({ groupId, targetNodeId, propertyKey, template: template || null });
+    },
+  }),
+
+  defineTool({
+    name: 'gst_iter_add_column',
+    description:
+      'Add a column to a record-list iterator variable. Kind = string/number/boolean/variable. For kind=variable, pass variableRef pointing at a kv-kind variable; cells become keys into that kv at unroll.',
+    schema: z.object({
+      pipelineId: z.string(),
+      variableRef: z.string(),
+      name: z.string(),
+      kind: z.enum(['string', 'number', 'boolean', 'variable']),
+      variableRefForColumn: z.string().optional(),
+    }),
+    inputSchema: jsonObject(
+      {
+        pipelineId: jsonStr(),
+        variableRef: jsonStr('Variable node id (or varName) of the record-list iterator'),
+        name: jsonStr('Column name; must be unique within the schema'),
+        kind: { type: 'string', enum: ['string', 'number', 'boolean', 'variable'] },
+        variableRefForColumn: jsonStr(
+          'Required when kind="variable" — node id of the kv-kind Variable node this column references',
+        ),
+      },
+      ['pipelineId', 'variableRef', 'name', 'kind'],
+    ),
+    handler: async ({ pipelineId, variableRef, name, kind, variableRefForColumn }) => {
+      let ok2 = false;
+      const result = updatePipelineFile(pipelineId, (p) => {
+        ok2 = addIteratorColumn(p, variableRef, { name, kind, variableRef: variableRefForColumn });
+      });
+      if (!result) return err(`Pipeline ${pipelineId} not found`);
+      if (!ok2) return err(`Variable ${variableRef} not found`);
+      return ok({ variableRef, name, kind });
+    },
+  }),
+
+  defineTool({
+    name: 'gst_iter_remove_column',
+    description: 'Remove a column from a record-list iterator (clears the cells too).',
+    schema: z.object({
+      pipelineId: z.string(),
+      variableRef: z.string(),
+      name: z.string(),
+    }),
+    inputSchema: jsonObject(
+      { pipelineId: jsonStr(), variableRef: jsonStr(), name: jsonStr() },
+      ['pipelineId', 'variableRef', 'name'],
+    ),
+    handler: async ({ pipelineId, variableRef, name }) => {
+      let ok2 = false;
+      const result = updatePipelineFile(pipelineId, (p) => {
+        ok2 = removeIteratorColumn(p, variableRef, name);
+      });
+      if (!result) return err(`Pipeline ${pipelineId} not found`);
+      if (!ok2) return err(`Variable ${variableRef} not found`);
+      return ok({ variableRef, name });
+    },
+  }),
+
+  defineTool({
+    name: 'gst_iter_rename_column',
+    description: 'Rename a column in a record-list iterator; renames the key in every row.',
+    schema: z.object({
+      pipelineId: z.string(),
+      variableRef: z.string(),
+      oldName: z.string(),
+      newName: z.string(),
+    }),
+    inputSchema: jsonObject(
+      {
+        pipelineId: jsonStr(),
+        variableRef: jsonStr(),
+        oldName: jsonStr(),
+        newName: jsonStr(),
+      },
+      ['pipelineId', 'variableRef', 'oldName', 'newName'],
+    ),
+    handler: async ({ pipelineId, variableRef, oldName, newName }) => {
+      let ok2 = false;
+      const result = updatePipelineFile(pipelineId, (p) => {
+        ok2 = renameIteratorColumn(p, variableRef, oldName, newName);
+      });
+      if (!result) return err(`Pipeline ${pipelineId} not found`);
+      if (!ok2) return err(`Variable ${variableRef} not found`);
+      return ok({ variableRef, oldName, newName });
+    },
+  }),
+
+  defineTool({
+    name: 'gst_iter_set_column_kind',
+    description:
+      'Change a column\'s kind (and optionally its kv variableRef when becoming "variable"-typed). Existing row cells keep their current values; the unroll coerces to the new kind.',
+    schema: z.object({
+      pipelineId: z.string(),
+      variableRef: z.string(),
+      name: z.string(),
+      kind: z.enum(['string', 'number', 'boolean', 'variable']),
+      variableRefForColumn: z.string().optional(),
+    }),
+    inputSchema: jsonObject(
+      {
+        pipelineId: jsonStr(),
+        variableRef: jsonStr(),
+        name: jsonStr(),
+        kind: { type: 'string', enum: ['string', 'number', 'boolean', 'variable'] },
+        variableRefForColumn: jsonStr(),
+      },
+      ['pipelineId', 'variableRef', 'name', 'kind'],
+    ),
+    handler: async ({ pipelineId, variableRef, name, kind, variableRefForColumn }) => {
+      let ok2 = false;
+      const result = updatePipelineFile(pipelineId, (p) => {
+        ok2 = setIteratorColumnKind(p, variableRef, name, kind, variableRefForColumn);
+      });
+      if (!result) return err(`Pipeline ${pipelineId} not found`);
+      if (!ok2) return err(`Variable ${variableRef} not found`);
+      return ok({ variableRef, name, kind });
+    },
+  }),
+
+  defineTool({
+    name: 'gst_iter_add_row',
+    description:
+      'Append a blank row to a record-list iterator. Cells are initialized to the per-column zero value (empty string / 0 / false). Returns the new row\'s index.',
+    schema: z.object({ pipelineId: z.string(), variableRef: z.string() }),
+    inputSchema: jsonObject(
+      { pipelineId: jsonStr(), variableRef: jsonStr() },
+      ['pipelineId', 'variableRef'],
+    ),
+    handler: async ({ pipelineId, variableRef }) => {
+      let added = false;
+      let rowIndex = -1;
+      const result = updatePipelineFile(pipelineId, (p) => {
+        added = addIteratorRow(p, variableRef);
+        const node = p.nodes.find(
+          (n) =>
+            n.type === 'gstVariable' &&
+            (n.id === variableRef || (n.data as { varName?: string }).varName === variableRef),
+        );
+        if (node && Array.isArray((node.data as { value: unknown }).value)) {
+          const arr = (node.data as { value: unknown[] }).value as unknown[];
+          rowIndex = arr.length - 1;
+        }
+      });
+      if (!result) return err(`Pipeline ${pipelineId} not found`);
+      if (!added) return err(`Variable ${variableRef} not found`);
+      return ok({ variableRef, rowIndex });
+    },
+  }),
+
+  defineTool({
+    name: 'gst_iter_remove_row',
+    description: 'Remove a row from a record-list iterator by zero-based index.',
+    schema: z.object({
+      pipelineId: z.string(),
+      variableRef: z.string(),
+      index: z.number().int().nonnegative(),
+    }),
+    inputSchema: jsonObject(
+      { pipelineId: jsonStr(), variableRef: jsonStr(), index: jsonNum() },
+      ['pipelineId', 'variableRef', 'index'],
+    ),
+    handler: async ({ pipelineId, variableRef, index }) => {
+      let ok2 = false;
+      const result = updatePipelineFile(pipelineId, (p) => {
+        ok2 = removeIteratorRow(p, variableRef, index);
+      });
+      if (!result) return err(`Pipeline ${pipelineId} not found`);
+      if (!ok2) return err(`Variable ${variableRef} not found or row out of range`);
+      return ok({ variableRef, index });
+    },
+  }),
+
+  defineTool({
+    name: 'gst_iter_set_cell',
+    description:
+      'Set a single cell in a record-list iterator. For variable-kind columns the value should be the kv key (the lookup happens at unroll).',
+    schema: z.object({
+      pipelineId: z.string(),
+      variableRef: z.string(),
+      rowIndex: z.number().int().nonnegative(),
+      column: z.string(),
+      value: valueSchema,
+    }),
+    inputSchema: jsonObject(
+      {
+        pipelineId: jsonStr(),
+        variableRef: jsonStr(),
+        rowIndex: jsonNum(),
+        column: jsonStr(),
+        value: jsonAny(),
+      },
+      ['pipelineId', 'variableRef', 'rowIndex', 'column', 'value'],
+    ),
+    handler: async ({ pipelineId, variableRef, rowIndex, column, value }) => {
+      let ok2 = false;
+      const result = updatePipelineFile(pipelineId, (p) => {
+        ok2 = setIteratorCell(p, variableRef, rowIndex, column, value);
+      });
+      if (!result) return err(`Pipeline ${pipelineId} not found`);
+      if (!ok2) return err(`Variable ${variableRef} not found or row out of range`);
+      return ok({ variableRef, rowIndex, column, value });
+    },
+  }),
+
+  defineTool({
+    name: 'gst_kv_set',
+    description:
+      'Set a key=value entry on a kv-kind variable. Creates the entry if missing or updates an existing one. The variable is promoted to kind=kv if it wasn\'t already.',
+    schema: z.object({
+      pipelineId: z.string(),
+      variableRef: z.string(),
+      key: z.string(),
+      value: z.string(),
+    }),
+    inputSchema: jsonObject(
+      {
+        pipelineId: jsonStr(),
+        variableRef: jsonStr(),
+        key: jsonStr(),
+        value: jsonStr(),
+      },
+      ['pipelineId', 'variableRef', 'key', 'value'],
+    ),
+    handler: async ({ pipelineId, variableRef, key, value }) => {
+      let ok2 = false;
+      const result = updatePipelineFile(pipelineId, (p) => {
+        ok2 = setKvEntry(p, variableRef, key, value);
+      });
+      if (!result) return err(`Pipeline ${pipelineId} not found`);
+      if (!ok2) return err(`Variable ${variableRef} not found or key invalid`);
+      return ok({ variableRef, key, value });
+    },
+  }),
+
+  defineTool({
+    name: 'gst_kv_remove',
+    description: 'Remove an entry from a kv variable.',
+    schema: z.object({
+      pipelineId: z.string(),
+      variableRef: z.string(),
+      key: z.string(),
+    }),
+    inputSchema: jsonObject(
+      { pipelineId: jsonStr(), variableRef: jsonStr(), key: jsonStr() },
+      ['pipelineId', 'variableRef', 'key'],
+    ),
+    handler: async ({ pipelineId, variableRef, key }) => {
+      let ok2 = false;
+      const result = updatePipelineFile(pipelineId, (p) => {
+        ok2 = removeKvEntry(p, variableRef, key);
+      });
+      if (!result) return err(`Pipeline ${pipelineId} not found`);
+      if (!ok2) return err(`Variable ${variableRef} not found`);
+      return ok({ variableRef, key });
+    },
+  }),
+
+  defineTool({
+    name: 'gst_kv_rename',
+    description:
+      'Rename a key in a kv variable. Cascades: any iterator row cell that referenced the old key (via a variable-kind column pointing at this kv) is updated to the new key.',
+    schema: z.object({
+      pipelineId: z.string(),
+      variableRef: z.string(),
+      oldKey: z.string(),
+      newKey: z.string(),
+    }),
+    inputSchema: jsonObject(
+      {
+        pipelineId: jsonStr(),
+        variableRef: jsonStr(),
+        oldKey: jsonStr(),
+        newKey: jsonStr(),
+      },
+      ['pipelineId', 'variableRef', 'oldKey', 'newKey'],
+    ),
+    handler: async ({ pipelineId, variableRef, oldKey, newKey }) => {
+      let ok2 = false;
+      const result = updatePipelineFile(pipelineId, (p) => {
+        ok2 = renameKvKey(p, variableRef, oldKey, newKey);
+      });
+      if (!result) return err(`Pipeline ${pipelineId} not found`);
+      if (!ok2) return err(`Variable ${variableRef} not found or oldKey missing`);
+      return ok({ variableRef, oldKey, newKey });
+    },
+  }),
+
+  defineTool({
+    name: 'gst_set_variable_complex',
+    description:
+      'Set the value (and optionally valueKind + schema) of a variable in one shot — for list/record-list/kv shapes. Use gst_set_variable for scalar (string/number/boolean) values.',
+    schema: z.object({
+      pipelineId: z.string(),
+      variableRef: z.string(),
+      valueKind: z
+        .enum(['string', 'number', 'boolean', 'list', 'record-list', 'kv'])
+        .optional(),
+      value: z.unknown(),
+      schema: z
+        .array(
+          z.object({
+            name: z.string(),
+            kind: z.enum(['string', 'number', 'boolean', 'variable']),
+            variableRef: z.string().optional(),
+          }),
+        )
+        .optional(),
+    }),
+    inputSchema: jsonObject(
+      {
+        pipelineId: jsonStr(),
+        variableRef: jsonStr('Variable node id or varName'),
+        valueKind: {
+          type: 'string',
+          enum: ['string', 'number', 'boolean', 'list', 'record-list', 'kv'],
+        },
+        value: {
+          description:
+            'The complete value. Array of primitives for list, array of row records for record-list, flat object for kv, scalar for string/number/boolean.',
+        },
+        schema: {
+          type: 'array',
+          description: 'Column schema (only meaningful for record-list)',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              name: jsonStr(),
+              kind: { type: 'string', enum: ['string', 'number', 'boolean', 'variable'] },
+              variableRef: jsonStr(),
+            },
+            required: ['name', 'kind'],
+          },
+        },
+      },
+      ['pipelineId', 'variableRef'],
+    ),
+    handler: async ({ pipelineId, variableRef, valueKind, value, schema }) => {
+      let ok2 = false;
+      const result = updatePipelineFile(pipelineId, (p) => {
+        ok2 = setVariableValueGeneric(p, variableRef, { valueKind, value, schema });
+      });
+      if (!result) return err(`Pipeline ${pipelineId} not found`);
+      if (!ok2) return err(`Variable ${variableRef} not found`);
+      return ok({ variableRef, valueKind, schema });
     },
   }),
 
