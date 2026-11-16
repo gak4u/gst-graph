@@ -9,3 +9,12 @@ release
 plugin-cache.json
 .test-build
 .claude/
+
+# added by convert-project.sh
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.p8
+graphify-out/
